@@ -665,8 +665,14 @@ class MainWindow:
                         all_items = [it for it in all_items if it[0] != p_to_del]
                 elif key in [10, 13, curses.KEY_ENTER] and items:
                     new_p, _ = items[cur]; self.save_history(); self.filename = os.path.abspath(new_p)
-                    h = hist_data.get(self.filename, {}); self.par_index = h.get("pos", 0)
-                    self.bookmarks = h.get("bookmarks", {"1": None, "2": None, "3": None})
+                    h = hist_data.get(self.filename, {})
+                    self.par_index = h.get("pos", 0)
+                    
+                    # ИСПРАВЬ ЭТУ СТРОКУ ТУТ:
+                    self.bookmarks = h.get("bookmarks", [])
+                    if not isinstance(self.bookmarks, list):
+                        self.bookmarks = []
+                        
                     if "lang" in h: self.load_lang(h["lang"])
                     ext = self.filename.lower()
                     if ext.endswith('.epub'): self.content = epub_parse(self.filename, self.tr('meta_unknown'), self.tr('meta_error'))
