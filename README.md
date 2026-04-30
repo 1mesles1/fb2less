@@ -37,7 +37,6 @@ sudo chmod +x /usr/bin/fb2less
 
 ## Usage
 `fb2less [FILE]`
-```
 
 ## Usage
 `fb2less [FILE]`
