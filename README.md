@@ -1,4 +1,4 @@
-# fb2less (v0.9)
+# fb2less (v0.8)
 
 Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
@@ -22,16 +22,21 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
 ### Ubuntu / Debian
 Manual installation:
-1. Install Python 3: `sudo apt install python3`
+1. Install Python 3: `sudo apt update && sudo apt install python3`
 2. Clone the repository.
 3. Install system-wide:
 ```bash
 sudo cp -r fb2less_lib /usr/lib/python3/dist-packages/
-sudo cp fb2less.1 /usr/share/man/man1/
+sudo cp fb2less.1 /usr/share/man/man1/fb2less.1
+sudo mkdir -p /usr/share/man/ru/man1
 sudo cp fb2less.ru.1 /usr/share/man/ru/man1/fb2less.1
 # Create executable
 echo -e '#!/usr/bin/env python3\nimport sys\nfrom fb2less_lib.reader import main\nsys.exit(main())' | sudo tee /usr/bin/fb2less
 sudo chmod +x /usr/bin/fb2less
+```
+
+## Usage
+`fb2less [FILE]`
 ```
 
 ## Usage
