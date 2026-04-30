@@ -11,8 +11,8 @@
 - **Двуязычное руководство**: Страницы руководства на английском и русском языках.
 
 ## Скриншоты
-[<img src="01.png" width="400">](01.png) [<img src="02.png" width="400">](02.png)
-[<img src="03.png" width="400">](03.png) [<img src="04.png" width="400">](04.png)
+[<img src="screenshots/01.png" width="400">](01.png) [<img src="screenshots/02.png" width="400">](02.png)
+[<img src="screenshots/03.png" width="400">](03.png) [<img src="screenshots/04.png" width="400">](04.png)
 
 ## Установка
 
