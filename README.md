@@ -17,7 +17,7 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 ## Installation
 
 ### Arch Linux
-1. Clone the repository: `git clone https://github.com`
+1. Clone the repository: `git clone https://github.com/1mesles1/fb2less`
 2. Run `makepkg -si`.
 
 ### Ubuntu / Debian
