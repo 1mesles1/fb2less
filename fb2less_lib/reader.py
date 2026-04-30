@@ -23,14 +23,32 @@ class MainWindow:
         self.head_color = hist.get("hc", 6)
         self.width = hist.get("width", 100)
         self.scroll_speed = hist.get("speed", 3)
-        self.bookmarks = hist.get("bookmarks", {"1": None, "2": None, "3": None})
+        self.bookmarks = hist.get("bookmarks", [])
+        if not isinstance(self.bookmarks, list):
+            self.bookmarks = [] # Если там старый словарь, сбрасываем в пустой список
         self.show_border = hist.get("border", 0)
         self.flip_mode = hist.get("flip", 0) 
         
         # 3. Загрузка языка
+        # Определяем путь к папке с переводами относительно файла reader.py
+        locales_dir = os.path.join(os.path.dirname(__file__), 'locales')
+        try:
+            self.available_langs = sorted([
+                f[:-5] for f in os.listdir(locales_dir) if f.endswith('.json')
+            ])
+        except:
+            self.available_langs = ['en', 'ru']
+
+        # Загружаем язык (из истории, или по умолчанию 'en')
         self.lang_code = hist.get("lang", "en")
+        
+        # Если сохраненный язык вдруг удалили из папки, берем первый доступный
+        if self.lang_code not in self.available_langs:
+            self.lang_code = self.available_langs[0] if self.available_langs else 'en'
+            
         self.load_lang(self.lang_code)
         
+        # --- ЗАГРУЗКА КОНТЕНТА (уже с учетом перевода) ---
         ext = filename.lower()
         if ext.endswith('.txt'):
             self.content = txt_parse(filename, unknown_author=self.tr('meta_unknown'))
@@ -50,7 +68,6 @@ class MainWindow:
             self.content = type('Empty', (), {
                 'paragraphs': [], 
                 'notes': {}, 
-                # Используем ключи перевода
                 'meta': {
                     'title': self.tr('meta_error'), 
                     'author': self.tr('meta_unknown'), 
@@ -61,7 +78,6 @@ class MainWindow:
             })
 
         if not self.content.paragraphs:
-            # Используем ключ перевода для пустого файла
             self.content.paragraphs = [('body', self.tr('err_empty_file'))]
 
         self.notes = getattr(self.content, 'notes', {})
@@ -661,6 +677,48 @@ class MainWindow:
         except: pass
         self.redraw_scr()
 
+    def show_bookmarks(self):
+        if not self.bookmarks: return
+        
+        cur = 0
+        r, c = self.screen.getmaxyx()
+        w_win = min(c - 4, 50)
+        h_win = min(r - 4, 15)
+        y, x = (r - h_win) // 2, (c - w_win) // 2
+        
+        try:
+            bw = curses.newwin(h_win, w_win, y, x)
+            bw.keypad(True)
+            bw.bkgd(" ", curses.color_pair(1))
+            
+            while True:
+                bw.erase(); bw.box()
+                title = f" {self.tr('ui_bookmarks')} "
+                bw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
+                
+                for i, bm in enumerate(self.bookmarks[:h_win-2]):
+                    style = curses.A_REVERSE if i == cur else curses.A_NORMAL
+                    pct = int((bm['pos'] / len(self.lines)) * 100) if self.lines else 0
+                    txt = f"{pct}%: {bm['text']}"[:w_win-4]
+                    bw.addstr(i + 1, 2, txt.ljust(w_win-4), style)
+
+                bw.refresh()
+                key = bw.getch()
+
+                if key in [ord('j'), curses.KEY_DOWN]: cur = min(len(self.bookmarks)-1, cur + 1)
+                elif key in [ord('k'), curses.KEY_UP]: cur = max(0, cur - 1)
+                elif key in [ord('x'), curses.KEY_DC]: # Удаление
+                    self.bookmarks.pop(cur)
+                    if not self.bookmarks: break
+                    cur = max(0, cur - 1)
+                elif key in [10, 13, curses.KEY_ENTER]: # Переход
+                    self.par_index = self.bookmarks[cur]['pos']
+                    break
+                elif key in [ord('q'), 27, ord('M')]: break
+        except: pass
+        self.redraw_scr()
+
+
     def animate_flip(self, direction):
         r, c = self.screen.getmaxyx()
         if self.show_border == 0:
@@ -824,45 +882,41 @@ class MainWindow:
         # 5. СТАТУС-БАР
         try:
             # --- 1. ГОТОВИМ ДАННЫЕ ---
-            active_list = [f"[M:{k}]" for k, v in sorted(self.bookmarks.items()) if v is not None]
-            bm = " " + " ".join(active_list) if active_list else ""
-            left_t = f"|==|:{self.width}{bm}"
+            # Лаконичный индикатор: просто [M], если список закладок не пуст
+            bm_indicator = " [M]" if self.bookmarks else ""
+            left_t = f"|==|:{self.width}{bm_indicator}"
             
             mid_t = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
             
-            # Режимы (из локализации)
             mode_names = self.tr('ui_mode_names')
             f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
             
-            # РАСЧЕТ ПРОЦЕНТОВ С ФИКСИРОВАННОЙ ШИРИНОЙ (4 символа)
             total_l = len(self.lines)
             pct_val = min(100, int(((self.par_index + r) / total_l) * 100)) if total_l > 0 else 0
             pct_str = f"{pct_val}%".rjust(4) 
             
-            # Автоскролл и Язык
             am = f"[S:{self.scroll_speed}]  " if self.auto_scroll else ""
             lang_label = self.tr('ui_lang_name')
-            
-            # СТРОКА ПРАВО (Проценты теперь не меняют длину строки при 5% или 100%)
-            right_t = f"{am}[{f_mode}] {pct_str} {lang_label}  "
+            right_t = f"{am}[{f_mode}] {pct_str}  {lang_label} "
 
             # --- 2. РИСУЕМ ---
             self.screen.attron(curses.color_pair(5))
             self.screen.move(r - 1, 0)
             self.screen.clrtoeol()
             
+            # Заливка фона строки
             self.screen.addstr(r - 1, 0, " " * (c - 1))
-            
-            # Лево
+
+            # Лево (Ширина + Метка закладок)
             if c > 10:
                 self.screen.addstr(r - 1, 1, left_t[:c-2])
             
-            # Центр
+            # Центр (Название файла)
             if c > len(mid_t) + 20:
                 start_x = (c - len(mid_t)) // 2
                 self.screen.addstr(r - 1, start_x, mid_t)
                 
-            # Право (insstr теперь всегда бьет в одну и ту же позицию)
+            # Право (Режим, Проценты, Язык)
             if c > len(right_t) + 5:
                 self.screen.insstr(r - 1, c - len(right_t), right_t)
 
@@ -889,9 +943,19 @@ class MainWindow:
                 time.sleep(0.01); continue
             if ch in [ord('.'), 1102]: ch = ord('/')
 
-            if ch == ord('K'): 
-                new_lang = "en" if self.lang_code == "ru" else "ru"
-                self.load_lang(new_lang)
+            elif ch == ord('K'): 
+                # Находим текущий язык в списке доступных
+                try:
+                    curr_idx = self.available_langs.index(self.lang_code)
+                except ValueError:
+                    curr_idx = 0
+                
+                # Берем следующий по кругу
+                next_idx = (curr_idx + 1) % len(self.available_langs)
+                self.lang_code = self.available_langs[next_idx]
+                
+                # Загружаем и применяем
+                self.load_lang(self.lang_code)
                 self.prepare_lines()
                 self.redraw_scr()
                 continue # Сразу уходим на новый круг, чтобы не сработали другие кнопки
@@ -919,55 +983,20 @@ class MainWindow:
             elif ch == ord('e'):
                 self.flip_mode = (self.flip_mode + 1) % 4
             
-            elif ch in [ord('m'), ord('M'), ord('x')]:
-                action = chr(ch)
-                self.screen.nodelay(False)
-                r, c = self.screen.getmaxyx()
+            elif ch == ord('m'):
+                # Берем текст из кортежа (тип, текст) -> line[1]
+                line_data = self.lines[self.par_index]
+                text_content = line_data[1] if isinstance(line_data, tuple) else str(line_data)
                 
-                # Локализованные подсказки для закладок
-                if action == 'm':
-                    msg = f" {self.tr('ui_bm_set')} "
-                elif action == 'M':
-                    msg = f" {self.tr('ui_bm_go')} "
-                else: # 'x'
-                    msg = f" {self.tr('ui_bm_del')} "
-                
-                self.screen.attron(curses.color_pair(5))
-                self.screen.move(r - 1, 0)
-                self.screen.clrtoeol()
-                self.screen.insstr(r - 1, 0, msg.ljust(c - 1))
-                self.screen.attroff(curses.color_pair(5))    
-                
-                key = self.screen.getch()
-                slot = chr(key)
-                if slot in "123":
-                    if action == 'm':
-                        target_par = 0
-                        current_line_count = 0
-                        for p_idx, (p_type, p_text) in enumerate(self.content.paragraphs):
-                            w = min(self.screen.getmaxyx()[1] - 4, self.width)
-                            lines_in_p = len(textwrap.wrap(p_text, width=w)) or 1
-                            if current_line_count + lines_in_p > self.par_index:
-                                target_par = p_idx
-                                break
-                            current_line_count += lines_in_p
-                        self.bookmarks[slot] = target_par
-                    elif action == 'M':
-                        target_par_idx = self.bookmarks.get(slot)
-                        if target_par_idx is not None:
-                            new_line_pos = 0
-                            for i in range(target_par_idx):
-                                p_type, p_text = self.content.paragraphs[i]
-                                w = min(self.screen.getmaxyx()[1] - 4, self.width)
-                                lines_in_p = len(textwrap.wrap(p_text, width=w)) or 1
-                                if p_type == "title": lines_in_p += 2
-                                new_line_pos += lines_in_p
-                            self.par_index = new_line_pos
-                    elif action == 'x':
-                        self.bookmarks[slot] = None
-                
-                self.screen.nodelay(True)
+                curr_text = text_content[:30].strip() + "..." if text_content else "..."
+                self.bookmarks.append({"pos": self.par_index, "text": curr_text})
+                self.save_history()
 
+            elif ch == ord('M'):
+                # Открыть список закладок
+                if self.bookmarks:
+                    self.show_bookmarks()
+            
             elif ch == ord('f'):
                 self.open_footnote()
 

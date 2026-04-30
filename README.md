@@ -1,39 +1,17 @@
-# fb2less (v0.8)
+# fb2less (v0.8.2)
 
-Расширенная консольная программа для чтения электронных книг для FB2, EPUB и TXT.
+Advanced console eBook reader for FB2, EPUB, and TXT.
 
-## Особенности
-- **Форматы**: FB2, EPUB, TXT (включена ZIP-архивы).
-- **Локализация**: Полная поддержка английского и русского языков (с возможностью переключения `K`).
-- **Навигация**: Главы, проценты и поиск в книге.
-- **Библиотека**: Встроенная история с настройками поиска и каждой книги.
-- **Настройка**: Изменяйте цвета, ширину текста и границы «на лету».
-- **Двуязычное руководство**: Страницы руководства на английском и русском языках.
+## Features
+- **Formats**: FB2, EPUB, TXT (including ZIP archives).
+- **Localization**: Full support for English and Russian (switchable with `K`).
+- **Navigation**: Chapters, percentages, and search within the book.
+- **Library**: Built-in history with search and per-book settings.
+- **Customization**: Change colors, text width, and borders on the fly.
 
-## Скриншоты
-![1](скриншоты/01.png)
-![2](скриншоты/02.png)
-![3](скриншоты/03.png)
+## Installation (Arch Linux)
+1. Clone the repo.
+2. Run `makepkg -si`.
 
-## Установка
-
-### Арч Линукс
-1. Клонируйте репозиторий: `git клон https://github.com`
-2. Бегать `makepkg -si`.
-
-### Убунту / Дебиан
-Установить его можно вручную:
-1. `sudo apt открыть python3`
-2. Клонируйте репозиторий.
-3. Для установки в масштабах всей системы выполните следующие действия:
-```баш
-sudo cp -r fb2less_lib/usr/lib/python3/dist-packages/
-sudo cp fb2less.1/usr/share/man/man1/
-sudo cp fb2less.ru.1/usr/share/man/ru/man1/fb2less.1
-# Создать исполняемый файл
-эхо -е '#!/usr/bin/env python3\nfrom fb2less_lib.reader импорт main\nimport sys\nsys.exit(main())' | sudo tee/usr/bin/fb2less
-sudo chmod +x/usr/bin/fb2less
-```
-
-## Использование
-`fb2less [файл]`
+## Usage
+`fb2less [file]`
