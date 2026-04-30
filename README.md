@@ -18,11 +18,28 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
 ### Arch Linux
 1. Clone the repository: `git clone https://github.com/1mesles1/fb2less`
-2. Run `makepkg -si`.
+2. cd fb2less
+3. Run `makepkg -si`.
 
-### Ubuntu / Debian
-Download the `.deb` package from the [Releases](https://github.com) page and install it:
-`sudo apt install ./fb2less_0.8.2_all.deb`
-
+### Ubuntu / Debian (Build from source)
+1. Install dependencies:
+   ```bash
+   sudo apt update
+   ```
+2. Clone the repository and build the package:
+   ```bash
+   git clone https://github.com
+   cd fb2less
+   # Make sure you have python3-pip or python3-build installed
+   python3 -m build --wheel --no-isolation
+   ```
+3. Install the generated package and manual pages:
+   ```bash
+   sudo python3 -m installer dist/*.whl
+   sudo cp fb2less.1 /usr/share/man/man1/
+   sudo mkdir -p /usr/share/man/ru/man1
+   sudo cp fb2less.ru.1 /usr/share/man/ru/man1/fb2less.1
+   ```
+   
 ## Usage
 `fb2less [FILE]`
