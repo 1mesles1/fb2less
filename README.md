@@ -10,6 +10,11 @@ Advanced console eBook reader for FB2, EPUB, and TXT.
 - **Customization**: Change colors, text width, and borders on the fly.
 - **Bilingual Manual**: Man pages in English and Russian.
 
+## Screenshots
+![1](screenshots/01.png)
+![2](screenshots/02.png)
+![3](screenshots/03.png)
+
 ## Installation
 
 ### Arch Linux
