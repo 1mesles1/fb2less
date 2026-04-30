@@ -28,7 +28,7 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
    ```
 2. Clone the repository and build the package:
    ```bash
-   git clone https://github.com
+   git clone https://github.com/1mesles1/fb2less
    cd fb2less
    # Make sure you have python3-pip or python3-build installed
    python3 -m build --wheel --no-isolation
