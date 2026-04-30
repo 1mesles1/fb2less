@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fb2less"
+version = "0.8"
+description = "Advanced console reader"
+dependencies = []
+
+[project.scripts]
+fb2less = "fb2less_lib.reader:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fb2less_lib*"]
+
+[tool.setuptools.package-data]
+fb2less_lib = ["locales/*.json"]
