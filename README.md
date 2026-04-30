@@ -22,18 +22,17 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 3. Run `makepkg -si`.
 
 ### Ubuntu / Debian (Build from source)
-1. Install dependencies:
+1. Install build tools:
    ```bash
-   sudo apt update
+   sudo apt update && sudo apt install python3-build python3-installer git
    ```
-2. Clone the repository and build the package:
+2. Clone the repository and build:
    ```bash
    git clone https://github.com/1mesles1/fb2less
    cd fb2less
-   # Make sure you have python3-pip or python3-build installed
    python3 -m build --wheel --no-isolation
    ```
-3. Install the generated package and manual pages:
+3. Install the package and manual pages:
    ```bash
    sudo python3 -m installer dist/*.whl
    sudo cp fb2less.1 /usr/share/man/man1/
