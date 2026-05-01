@@ -1,4 +1,4 @@
-# fb2less (v0.8.2)
+# fb2less (v0.8.3)
 
 Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 

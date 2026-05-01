@@ -8,47 +8,52 @@ class MainWindow:
     def __init__(self, stdscr, filename):
         self.screen = stdscr
         self.filename = os.path.abspath(filename)
-        self.history_file = os.path.expanduser("~/.fb2less_history")
+        
+        # 1. НАСТРОЙКА ПУТЕЙ (~/.config/fb2less)
+        self.config_dir = os.path.expanduser("~/.config/fb2less")
+        os.makedirs(self.config_dir, exist_ok=True)
+        
+        self.history_file = os.path.join(self.config_dir, "history.json")
+        self.config_file = os.path.join(self.config_dir, "config.json")
+
+        self.history_data = self.load_full_history_file()
+        hist = self.history_data.get(self.filename, {})
+
         self.auto_scroll = False
-        self.scroll_speed = 2
         self.last_auto_time = time.time()
         
-        # 1. Сначала загружаем историю
-        hist = self.load_history()
+        # 2. ЗАГРУЗКА ГЛОБАЛЬНОГО КОНФИГА (Цвета, Язык, Интерфейс)
+        conf = self.load_config()
+        self.fg = conf.get("fg", 7)
+        self.bg = conf.get("bg", 0)
+        self.head_color = conf.get("hc", 6)
+        self.width = conf.get("width", 100)
+        self.scroll_speed = conf.get("speed", 3)
+        self.show_border = conf.get("border", 0)
+        self.flip_mode = conf.get("flip", 0)
+        self.lang_code = conf.get("lang", "en")
         
-        # 2. Берем данные
+        # 3. ЗАГРУЗКА ИСТОРИИ КНИГИ (Прогресс и закладки)
+        hist = self.load_history()
         self.par_index = hist.get("pos", 0)
-        self.fg = hist.get("fg", 7)
-        self.bg = hist.get("bg", 0)
-        self.head_color = hist.get("hc", 6)
-        self.width = hist.get("width", 100)
-        self.scroll_speed = hist.get("speed", 3)
         self.bookmarks = hist.get("bookmarks", [])
         if not isinstance(self.bookmarks, list):
-            self.bookmarks = [] # Если там старый словарь, сбрасываем в пустой список
-        self.show_border = hist.get("border", 0)
-        self.flip_mode = hist.get("flip", 0) 
-        
-        # 3. Загрузка языка
-        # Определяем путь к папке с переводами относительно файла reader.py
+            self.bookmarks = []
+            
+        # 4. ПОИСК ДОСТУПНЫХ ЛОКАЛЕЙ
         locales_dir = os.path.join(os.path.dirname(__file__), 'locales')
         try:
-            self.available_langs = sorted([
-                f[:-5] for f in os.listdir(locales_dir) if f.endswith('.json')
-            ])
+            self.available_langs = sorted([f[:-5] for f in os.listdir(locales_dir) if f.endswith('.json')])
         except:
             self.available_langs = ['en', 'ru']
 
-        # Загружаем язык (из истории, или по умолчанию 'en')
-        self.lang_code = hist.get("lang", "en")
-        
-        # Если сохраненный язык вдруг удалили из папки, берем первый доступный
+        # Проверка валидности языка
         if self.lang_code not in self.available_langs:
             self.lang_code = self.available_langs[0] if self.available_langs else 'en'
             
         self.load_lang(self.lang_code)
         
-        # --- ЗАГРУЗКА КОНТЕНТА (уже с учетом перевода) ---
+        # 5. ЗАГРУЗКА КОНТЕНТА КНИГИ (уже с учетом перевода)
         ext = filename.lower()
         if ext.endswith('.txt'):
             self.content = txt_parse(filename, unknown_author=self.tr('meta_unknown'))
@@ -99,40 +104,55 @@ class MainWindow:
         curses.init_pair(4, -1, -1)
         curses.init_pair(5, self.bg, self.fg)
     
+    def load_config(self):
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, "r", encoding='utf-8') as f:
+                    return json.load(f)
+        except: pass
+        return {}
+
+    def load_full_history_file(self):
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, "r", encoding='utf-8') as f:
+                    return json.load(f)
+        except: pass
+        return {}
+
     def load_history(self):
         try:
             if os.path.exists(self.history_file):
-                with open(self.history_file, "r") as f: 
-                    return json.load(f).get(self.filename, {})
+                with open(self.history_file, "r", encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get(self.filename, {})
         except: pass
         return {}
 
     def save_history(self):
         try:
-            data = {}
-            if os.path.exists(self.history_file):
-                with open(self.history_file, "r") as f: 
-                    data = json.load(f)
-            
-            data[self.filename] = {
-                "pos": self.par_index, 
-                "fg": self.fg, 
-                "bg": self.bg, 
-                "hc": self.head_color,
-                "width": self.width, 
-                "speed": self.scroll_speed,
-                "bookmarks": self.bookmarks,
-                "flip": self.flip_mode,
-                "border": self.show_border,
-                # Используем ключ для неизвестного названия
-                "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
-                "time": time.time(),
-                "lang": self.lang_code  # Сохраняем выбранный язык в историю
+            # 1. Сохраняем глобальный конфиг
+            config_data = {
+                "fg": self.fg, "bg": self.bg, "hc": self.head_color,
+                "width": self.width, "speed": self.scroll_speed,
+                "border": self.show_border, "flip": self.flip_mode,
+                "lang": self.lang_code
             }
-            with open(self.history_file, "w") as f: 
-                json.dump(data, f)
-        except: 
-            pass
+            with open(self.config_file, "w", encoding='utf-8') as f:
+                json.dump(config_data, f, ensure_ascii=False, indent=4)
+
+            # 2. Обновляем текущую книгу в нашем "складе"
+            self.history_data[self.filename] = {
+                "pos": self.par_index,
+                "bookmarks": self.bookmarks,
+                "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
+                "time": time.time()
+            }
+            
+            # 3. Записываем весь склад в файл
+            with open(self.history_file, "w", encoding='utf-8') as f:
+                json.dump(self.history_data, f, ensure_ascii=False, indent=4)
+        except: pass
 
     def load_lang(self, lang_code):
         import json
@@ -536,17 +556,24 @@ class MainWindow:
         deleted_count = 0
         paths_in_history = list(hist_data.keys())
         for path in paths_in_history:
+            # ПРОПУСКАЕМ НАСТРОЙКИ
+            if path == "settings": continue
+            
             if not os.path.exists(path):
                 del hist_data[path]
                 deleted_count += 1
 
+        # СИНХРОНИЗИРУЕМ ПАМЯТЬ ПРОГРАММЫ
+        self.history_data = hist_data
+
         if found_new > 0 or deleted_count > 0:
-            with open(self.history_file, "w") as f:
-                json.dump(hist_data, f)
+            with open(self.history_file, "w", encoding='utf-8') as f:
+                # Добавь indent=4 для красоты
+                json.dump(hist_data, f, ensure_ascii=False, indent=4)
         
         sw.erase()
         sw.box()
-        # Сообщаем об успехе (локализованная строка с переменными)
+        # Сообщаем об успехе
         res_msg = f"{self.tr('scan_new')}: {found_new} / {self.tr('scan_del')}: {deleted_count}"
         sw.addstr(1, max(1, (26-len(res_msg))//2), res_msg[:24])
         sw.refresh()
@@ -554,16 +581,20 @@ class MainWindow:
         self.redraw_scr()
 
     def show_library(self):
-        if not os.path.exists(self.history_file): return
-        try:
-            with open(self.history_file, "r") as f:
-                hist_data = json.load(f)
-        except: return
-
+        # 1. Используем данные из памяти (уже загружены в __init__ и обновляются в Z)
+        hist_data = self.history_data
+        
         all_items = []
-        for path, info in hist_data.items():
-            title = info.get('title', os.path.basename(path))
-            all_items.append((path, title))
+        try:
+            for path, info in hist_data.items():
+                # Пропускаем настройки, чтобы не было ошибки "Deleted: 1"
+                if path == "settings": continue
+                
+                title = info.get('title', os.path.basename(path))
+                all_items.append((path, title))
+        except Exception: 
+            pass # Закрыли блок try
+
         all_items.sort(key=lambda x: x[1].lower())
 
         filter_query = ""
@@ -661,27 +692,47 @@ class MainWindow:
                     p_to_del, _ = items[cur]
                     if p_to_del in hist_data:
                         del hist_data[p_to_del]
+                        # ВНИМАНИЕ ТУТ:
+                        with open(self.history_file, "w") as f: 
+                            json.dump(hist_data, f, ensure_ascii=False, indent=4)
+                        all_items = [it for it in all_items if it[0] != p_to_del]
+                        # Нужно обновить и self.history_data, чтобы MainWindow о нем забыл
+                        if hasattr(self, 'history_data') and p_to_del in self.history_data:
+                            del self.history_data[p_to_del]
                         with open(self.history_file, "w") as f: json.dump(hist_data, f)
                         all_items = [it for it in all_items if it[0] != p_to_del]
                 elif key in [10, 13, curses.KEY_ENTER] and items:
-                    new_p, _ = items[cur]; self.save_history(); self.filename = os.path.abspath(new_p)
+                    new_p, _ = items[cur]
+                    self.save_history() # Сохраняем текущую
+                    self.filename = os.path.abspath(new_p)
+                    
+                    # Загружаем прогресс выбранной книги
                     h = hist_data.get(self.filename, {})
                     self.par_index = h.get("pos", 0)
-                    
-                    # ИСПРАВЬ ЭТУ СТРОКУ ТУТ:
                     self.bookmarks = h.get("bookmarks", [])
                     if not isinstance(self.bookmarks, list):
                         self.bookmarks = []
-                        
-                    if "lang" in h: self.load_lang(h["lang"])
+                    
+                    # Язык НЕ трогаем, он подхватится из глобального self.lang_code
+                    
+                    # Перезагружаем парсеры
                     ext = self.filename.lower()
-                    if ext.endswith('.epub'): self.content = epub_parse(self.filename, self.tr('meta_unknown'), self.tr('meta_error'))
-                    elif ext.endswith(('.fb2', '.zip')): self.content = fb2parse(self.filename, self.tr('meta_unknown_title'), self.tr('meta_unknown'))
-                    else: self.content = txt_parse(self.filename, self.tr('meta_unknown'))
-                    self.notes = getattr(self.content, 'notes', {}); self.prepare_lines(); return
-                elif key in [ord('q'), ord('L')]: break
-        except: pass
+                    if ext.endswith('.epub'): 
+                        self.content = epub_parse(self.filename, self.tr('meta_unknown'), self.tr('meta_error'))
+                    elif ext.endswith(('.fb2', '.zip')): 
+                        self.content = fb2parse(self.filename, self.tr('meta_unknown_title'), self.tr('meta_unknown'))
+                    else: 
+                        self.content = txt_parse(self.filename, self.tr('meta_unknown'))
+                    
+                    self.notes = getattr(self.content, 'notes', {})
+                    self.prepare_lines()
+                    return
+                elif key in [ord('q'), ord('L')]: 
+                    break
+        except: # Закрываем try из show_library
+            pass
         self.redraw_scr()
+
 
     def show_bookmarks(self):
         if not self.bookmarks: return
@@ -1095,54 +1146,38 @@ def main():
     parser.add_argument('filename', nargs='?')
     args = parser.parse_args()
 
-    # --- ЗАГРУЗКА ЯЗЫКА ДЛЯ КОНСОЛИ ---
-    # Пытаемся понять, какой язык был последним, чтобы выдать справку на нем
-    history_path = os.path.expanduser("~/.fb2less_history")
-    lang_code = "ru" # по умолчанию
-    if os.path.exists(history_path):
-        try:
-            with open(history_path, "r") as f:
-                data = json.load(f)
-                # Берем язык из последней открытой книги
-                latest = max(data.items(), key=lambda x: x[1].get('time', 0))
-                lang_code = latest[1].get('lang', 'ru')
-        except: pass
-
-    # Загружаем JSON перевода вручную для main
-    def get_msg(key, default):
-        try:
-            lp = os.path.join(os.path.dirname(__file__), 'fb2less_lib', 'locales', f'{lang_code}.json')
-            with open(lp, 'r', encoding='utf-8') as f:
-                return json.load(f).get(key, default)
-        except: return default
+    history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 7.0")
+        print("fb2less version 0.8.3")
         return
 
     if args.help:
-        # Используем локализацию даже в консоли!
-        print(get_msg('cli_usage', "Usage: fb2less <file.fb2>"))
-        print(f"\n{get_msg('cli_controls', 'Controls:')}")
-        print(f"  h            - {get_msg('cli_help', 'help')}")
-        print(f"  L            - {get_msg('cli_lib', 'library')}")
-        print(f"  q            - {get_msg('cli_exit', 'exit')}")
+        # Просто выводим английский текст напрямую
+        print("Usage: fb2less [FILE]")
+        print("\nControls:")
+        print("  h            - help")
+        print("  L            - library")
+        print("  q            - exit")
         return
 
     filename = args.filename
+    # Если файл не указан, ищем последнюю открытую книгу в истории
     if not filename and os.path.exists(history_path):
         try:
             with open(history_path, "r") as f:
                 data = json.load(f)
-                if data:
-                    filename = max(data.items(), key=lambda x: x[1].get('time', 0))[0]
+                # Убираем "settings" из поиска, чтобы max не упал
+                books = {k: v for k, v in data.items() if k != "settings"}
+                if books:
+                    filename = max(books.items(), key=lambda x: x[1].get('time', 0))[0]
         except: pass
 
     if filename:
         if not os.path.exists(filename):
-            print(f"{get_msg('err_file_not_found', 'File not found')}: {filename}")
+            print(f"File not found: {filename}")
             return
         
         curses.wrapper(lambda stdscr: MainWindow(stdscr, filename))
     else:
-        print(get_msg('cli_usage', "Usage: fb2less [FILE]"))
+        print("Usage: fb2less [FILE]")
