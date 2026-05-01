@@ -966,7 +966,6 @@ class MainWindow:
         # 5. СТАТУС-БАР
         try:
             # --- 1. ГОТОВИМ ДАННЫЕ ---
-            # Лаконичный индикатор: просто [M], если список закладок не пуст
             bm_indicator = " [M]" if self.bookmarks else ""
             left_t = f"|==|:{self.width}{bm_indicator}"
             
@@ -975,9 +974,19 @@ class MainWindow:
             mode_names = self.tr('ui_mode_names')
             f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
             
+            # --- НОВЫЙ БЛОК ПРОГРЕСС-БАРА ---
             total_l = len(self.lines)
             pct_val = min(100, int(((self.par_index + r) / total_l) * 100)) if total_l > 0 else 0
-            pct_str = f"{pct_val}%".rjust(4) 
+            
+            bar_w = 10
+            filled = int(bar_w * (pct_val / 100))
+            p_bar = f"[{'█' * filled}{' ' * (bar_w - filled)}]"
+            
+            # Резервируем ровно 4 символа под проценты (например, " 45%")
+            pct_formatted = f"{pct_val}%".rjust(4)
+            # Итоговая строка всегда будет занимать 10 (бар) + 2 (скобки) + 1 (пробел) + 4 (цифры) = 17 символов
+            pct_str = f"{p_bar} {pct_formatted}"
+            # -------------------------------
             
             am = f"[S:{self.scroll_speed}]  " if self.auto_scroll else ""
             lang_label = self.tr('ui_lang_name')
@@ -988,19 +997,15 @@ class MainWindow:
             self.screen.move(r - 1, 0)
             self.screen.clrtoeol()
             
-            # Заливка фона строки
             self.screen.addstr(r - 1, 0, " " * (c - 1))
 
-            # Лево (Ширина + Метка закладок)
             if c > 10:
                 self.screen.addstr(r - 1, 1, left_t[:c-2])
             
-            # Центр (Название файла)
-            if c > len(mid_t) + 20:
+            if c > len(mid_t) + len(right_t) + 15: # Увеличил запас под центр
                 start_x = (c - len(mid_t)) // 2
                 self.screen.addstr(r - 1, start_x, mid_t)
                 
-            # Право (Режим, Проценты, Язык)
             if c > len(right_t) + 5:
                 self.screen.insstr(r - 1, c - len(right_t), right_t)
 
@@ -1176,7 +1181,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.8.3")
+        print("fb2less version 0.8.4")
         return
 
     if args.help:
