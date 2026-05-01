@@ -428,7 +428,8 @@ class MainWindow:
                         if len(chapter_name) > max_text_w:
                             chapter_name = chapter_name[:max_text_w-3] + "..."
                         
-                        line_txt = f"{idx+1:2}. {chapter_name}"
+                        #line_txt = f"{idx+1:2}. {chapter_name}" #С нумерацией глав
+                        line_txt = f"  {chapter_name}" #Без нумерации глав
                         tw.addstr(i + 1, 2, line_txt.ljust(w_win-5), style)
                 
                 tw.refresh()
@@ -1181,7 +1182,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.8.4")
+        print("fb2less version 0.8.5")
         return
 
     if args.help:

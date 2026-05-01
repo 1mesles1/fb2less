@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fb2less"
-version = "0.8.4"
+version = "0.8.5"
 description = "Advanced console reader"
 # Зависимости пустые, так как curses входит в стандартную библиотеку Python
 dependencies = []

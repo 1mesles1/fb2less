@@ -47,12 +47,23 @@ def prepare_layout(paragraphs, width, meta_author="", notes=None, notes_label="-
             indent = width // 3
             for lt in textwrap.wrap(t, width=width - indent - 2):
                 new_lines.append(("body", " " * indent + lt))
+
         elif p_type == "cite":
-            if not new_lines or new_lines[-1] != "": new_lines.append(("body", ""))
+            if new_lines and new_lines[-1][1] != "":
+                new_lines.append(("body", ""))
             for lt in textwrap.wrap(text, width=width-8):
-                new_lines.append(("cite", "    " + lt))
-        elif p_type == "author":
-            new_lines.append(("body", t.rjust(width)))
+                new_lines.append(("body", "    " + lt))
+
+        elif p_type == "emphasis_block":
+            # Используем text вместо t для надежности
+            for lt in textwrap.wrap(text, width=width-8):
+                new_lines.append(("body", "    " + lt))
+
+        elif p_type in ("author", "text-author"): 
+            # Объединил оба варианта в один блок
+            for lt in textwrap.wrap(text, width=width-12):
+                new_lines.append(("body", "        " + lt))
+            new_lines.append(("body", ""))
         else:
             # Разбиваем абзац на строки
             wrapped = textwrap.wrap(t, width=width-1)
