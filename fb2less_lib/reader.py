@@ -791,58 +791,85 @@ class MainWindow:
         width = x_r - x_l
         step = max(1, width // 20) 
 
-        # --- ФАЗА 1: УХОД  ---
-        if direction > 0:
-            for x in range(x_r - 1, x_l - step, -step):
-                for curr_x in range(x, min(x + step, x_r)):
-                    if x_l <= curr_x < x_r:
-                        self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                self.screen.refresh()
-                time.sleep(0.01)
-        else:
-            for x in range(x_l, x_r + step, step):
-                for curr_x in range(max(x_l, x - step), x):
-                    if x_l <= curr_x < x_r:
-                        self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                self.screen.refresh()
-                time.sleep(0.01)
+        # --- ФАЗА 1: УХОД ---
+        # Медленный уход для 1, 3, 4
+        if self.flip_mode in [1, 3, 4]:
+            if direction > 0:
+                for x in range(x_r - 1, x_l - step, -step):
+                    for curr_x in range(x, min(x + step, x_r)):
+                        if x_l <= curr_x < x_r:
+                            self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+                    self.screen.refresh()
+                    time.sleep(0.01)
+            else:
+                for x in range(x_l, x_r + step, step):
+                    for curr_x in range(max(x_l, x - step), x):
+                        if x_l <= curr_x < x_r:
+                            self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+                    self.screen.refresh()
+                    time.sleep(0.01)
+        
+        # Мгновенный уход для 2 (Твой новый метод)
+        elif self.flip_mode == 2:
+            for x in range(x_l, x_r):
+                self.screen.vline(y_top, x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+            self.screen.refresh()
 
+        # Меняем страницу
         d_h = r - 3 if self.show_border == 2 else (r - 2 if self.show_border == 1 else r - 1)
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
-        # --- ФАЗА 2: ПОЯВЛЕНИЕ  ---
+        # --- ФАЗА 2: ПОЯВЛЕНИЕ ---
         if self.flip_mode == 2:
-            # Старый B2: приход от края
+            # Твой НОВЫЙ метод (Инвертированный медленный приход)
             if direction > 0:
                 for x in range(x_r - 1, x_l - step, -step):
                     self.redraw_scr()
                     for cover_x in range(x_l, x):
                         self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
                     self.screen.refresh()
-                    time.sleep(0.01)
+                    time.sleep(0.02)
             else:
                 for x in range(x_l, x_r + step, step):
                     self.redraw_scr()
                     for cover_x in range(x, x_r):
                         self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
                     self.screen.refresh()
-                    time.sleep(0.01)
+                    time.sleep(0.02)
+
         elif self.flip_mode == 3:
-            # B3: ИНВЕРТИРОВАННЫЙ приход (встречный)
+            # Твой старый B:2 (Обычный медленный приход)
+            if direction > 0:
+                for x in range(x_r - 1, x_l - step, -step):
+                    self.redraw_scr()
+                    for cover_x in range(x_l, x):
+                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+                    self.screen.refresh()
+                    time.sleep(0.01)
+            else:
+                for x in range(x_l, x_r + step, step):
+                    self.redraw_scr()
+                    for cover_x in range(x, x_r):
+                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+                    self.screen.refresh()
+                    time.sleep(0.01)
+
+        elif self.flip_mode == 4:
+            # Твой старый B:3 (Встречный)
             if direction > 0:
                 for x in range(x_l, x_r + step, step):
                     self.redraw_scr()
                     for cover_x in range(x, x_r):
                         self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
                     self.screen.refresh()
-                    time.sleep(0.02)
+                    time.sleep(0.01)
             else:
                 for x in range(x_r - 1, x_l - step, -step):
                     self.redraw_scr()
                     for cover_x in range(x_l, x):
                         self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
                     self.screen.refresh()
-                    time.sleep(0.02)
+                    time.sleep(0.01)
         else: 
             self.redraw_scr()
 
@@ -1038,7 +1065,7 @@ class MainWindow:
                 self.jump_to_pct()
                 continue
             elif ch == ord('e'):
-                self.flip_mode = (self.flip_mode + 1) % 4
+                self.flip_mode = (self.flip_mode + 1) % 5
             
             elif ch == ord('m'):
                 # Берем текст из кортежа (тип, текст) -> line[1]

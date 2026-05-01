@@ -52,7 +52,7 @@
     "ui_bookmarks": " Lesezeichen ",
     "lib_search": " Suche: ",
     "err_file_not_found": "Datei nicht gefunden!",
-    "ui_mode_names": ["STD", "B:1", "B:2", "B:3"],
+    "ui_mode_names": ["STD", "B:1", "B:2", "B:3", "B:4"],
     "ui_bm_set": "Lesezeichen setzen...",
     "ui_bm_go": "Lesezeichen öffnen...",
     "ui_bm_del": "Lesezeichen löschen...",

@@ -52,7 +52,7 @@
     "ui_bookmarks": " Закладки ",
     "lib_search": " Поиск: ",
     "err_file_not_found": "Файл не найден!",
-    "ui_mode_names": ["STD", "B:1", "B:2", "B:3"],
+    "ui_mode_names": ["STD", "B:1", "B:2", "B:3", "B:4"],
     "ui_bm_set": "Метка [1-3]...",
     "ui_bm_go": "Перейти [1-3]...",
     "ui_bm_del": "Удалить [1-3]...",
