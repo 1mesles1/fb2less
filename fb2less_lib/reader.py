@@ -581,6 +581,94 @@ class MainWindow:
         time.sleep(1.5)
         self.redraw_scr()
 
+    def show_settings(self):
+        r, c = self.screen.getmaxyx()
+        conf = self.load_config()
+        scan_path = conf.get("scan_path", os.getcwd())
+
+        # Пункты меню (Язык теперь первый)
+        cur = 0
+        w_win = min(c - 4, 60)
+        h_win = 7  # Уменьшили высоту окна (было 10)
+        y, x = (r - h_win) // 2, (c - w_win) // 2
+        
+        try:
+            sw = curses.newwin(h_win, w_win, y, x)
+            sw.keypad(True)
+            sw.bkgd(" ", curses.color_pair(1))
+            
+            while True:
+                sw.erase(); sw.box()
+                title = f" {self.tr('ui_settings')} "
+                sw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
+                
+                menu_items = [
+                    f"{self.tr('ui_language')}: {self.lang_code.upper()}", # Новый пункт
+                    f"{self.tr('set_path')}: {scan_path}",
+                    self.tr('set_scan'),
+                    self.tr('set_clear_lib'),
+                    self.tr('set_save')
+                ]
+
+                for i, item in enumerate(menu_items):
+                    style = curses.A_REVERSE if i == cur else curses.A_NORMAL
+                    d_text = item if len(item) < w_win-4 else item[:w_win-7] + "..."
+                    sw.addstr(i + 1, 2, d_text.ljust(w_win - 4), style) # Отрисовка с i+1
+
+                sw.refresh()
+                key = sw.getch()
+
+                if key in [ord('j'), curses.KEY_DOWN]:
+                    cur = (cur + 1) % len(menu_items)
+                elif key in [ord('k'), curses.KEY_UP]:
+                    cur = (cur - 1) % len(menu_items)
+                elif key in [10, 13, curses.KEY_ENTER]:
+                    if cur == 0: # Смена языка
+                        idx = self.available_langs.index(self.lang_code)
+                        self.lang_code = self.available_langs[(idx + 1) % len(self.available_langs)]
+                        self.load_lang(self.lang_code)
+                        self.prepare_lines() # Пересобираем текст под новые метки
+                    
+                    elif cur == 1: # Путь
+                        curses.echo(); curses.curs_set(1)
+                        prompt = "> "
+                        # Рисуем поле ввода на последней строке окна (h_win-2)
+                        sw.addstr(h_win-2, 2, prompt + " "*(w_win-5), curses.color_pair(5))
+                        try:
+                            raw = sw.getstr(h_win-2, 2 + len(prompt))
+                            input_p = raw.decode('utf-8').strip()
+                            if input_p:
+                                test_p = os.path.abspath(os.path.expanduser(input_p))
+                                if os.path.isdir(test_p): scan_path = test_p
+                                else:
+                                    sw.addstr(h_win-2, 2, self.tr('err_path_nf').ljust(w_win-4), curses.color_pair(2))
+                                    sw.refresh(); time.sleep(1)
+                        except: pass
+                        curses.noecho(); curses.curs_set(0)
+                    
+                    elif cur == 2: # Скан
+                        if os.path.isdir(scan_path):
+                            old_cwd = os.getcwd()
+                            try:
+                                os.chdir(scan_path); self.scan_directory()
+                            finally: os.chdir(old_cwd)
+                        break
+                    elif cur == 3: # Очистка
+                        self.history_data = {self.filename: self.history_data.get(self.filename, {})}
+                        with open(self.history_file, "w", encoding='utf-8') as f:
+                            json.dump(self.history_data, f, ensure_ascii=False, indent=4)
+                        break
+                    elif cur == 4: # Сохранить
+                        c_data = self.load_config()
+                        c_data.update({"scan_path": scan_path, "lang": self.lang_code})
+                        with open(self.config_file, "w", encoding='utf-8') as f:
+                            json.dump(c_data, f, ensure_ascii=False, indent=4)
+                        break
+                elif key in [ord('q'), 27, ord('o'), 1097]:
+                    break
+        except: pass
+        self.redraw_scr()
+
     def show_library(self):
         # 1. Используем данные из памяти (уже загружены в __init__ и обновляются в Z)
         hist_data = self.history_data
@@ -1054,6 +1142,8 @@ class MainWindow:
             elif ch == ord('q'): 
                 self.save_history()
                 break
+            elif ch in [ord('o'), 1097]:
+                self.show_settings()
             elif ch == ord('/'): self.do_search()
             elif ch == ord('n'): self.find_next()
             elif ch == ord('N'): self.find_prev()
@@ -1182,7 +1272,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.8.5")
+        print("fb2less version 0.8.7")
         return
 
     if args.help:

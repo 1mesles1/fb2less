@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fb2less"
-version = "0.8.5"
+version = "0.8.7"
 description = "Advanced console reader"
-# Зависимости пустые, так как curses входит в стандартную библиотеку Python
 dependencies = []
+requires-python = ">=3.7"
 
 [project.scripts]
 fb2less = "fb2less_lib.reader:main"
@@ -15,7 +15,7 @@ fb2less = "fb2less_lib.reader:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["fb2less_lib*"]
+namespaces = false
 
-# КРИТИЧЕСКИ ВАЖНО: без этого JSON-ы не попадут в пакет!
 [tool.setuptools.package-data]
 fb2less_lib = ["locales/*.json"]

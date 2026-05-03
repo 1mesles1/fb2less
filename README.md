@@ -1,5 +1,5 @@
-# fb2less (v0.8.5)
-**1 May 2026**
+# fb2less (v0.8.7)
+**3 May 2026**
 
 Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
