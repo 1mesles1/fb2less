@@ -1,6 +1,6 @@
 pkgname=fb2less
 pkgver=0.8.5
-pkgrel=1
+pkgrel=2
 pkgdesc="Advanced console reader (FB2, EPUB, TXT) with multi-language support"
 arch=('any')
 url="https://localhost"
