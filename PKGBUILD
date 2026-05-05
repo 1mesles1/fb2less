@@ -1,5 +1,5 @@
 pkgname=fb2less
-pkgver=0.9.1
+pkgver=0.9.2
 pkgrel=1
 pkgdesc="Advanced console reader (FB2, EPUB, TXT) with multi-language support"
 arch=('any')

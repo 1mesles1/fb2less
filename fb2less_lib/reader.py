@@ -142,10 +142,13 @@ class MainWindow:
                 json.dump(config_data, f, ensure_ascii=False, indent=4)
 
             # 2. Обновляем текущую книгу в нашем "складе"
+            # Добавляем 'author' и 'series', чтобы они не пропадали из библиотеки
             self.history_data[self.filename] = {
                 "pos": self.par_index,
                 "bookmarks": self.bookmarks,
                 "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
+                "author": self.content.meta.get('author', self.tr('meta_unknown')),
+                "series": self.content.meta.get('series', ''),
                 "time": time.time()
             }
             
@@ -738,6 +741,16 @@ class MainWindow:
                 else:
                     items = sorted(raw_items, key=lambda x: x['title'].lower())
 
+                # ВОЗВРАЩАЕМ ФОКУС: если мы только зашли или сменили сортировку
+                # ищем, где в новом списке находится наша открытая книга
+                if 'first_open' not in locals():
+                    target_path = os.path.abspath(self.filename)
+                    for i, it in enumerate(items):
+                        if os.path.abspath(it['path']) == target_path:
+                            cur = i
+                            break
+                    first_open = True # Чтобы фокус не прыгал при каждом движении
+
                 if cur >= len(items): cur = max(0, len(items) - 1)
                 
                 # Резервируем 5 строк под стабильный подвал (2 строки на инфо + разделители)
@@ -813,10 +826,11 @@ class MainWindow:
                 elif key == 27: # ESC
                     if filter_query: filter_query = ""; cur = 0
                     else: break
-                elif key in [ord('s'), 1099]: # Сортировка
+                elif key in [ord('s'), 1099]:
                     sort_mode = (sort_mode + 1) % 3
-                    filter_query = "" # ОЧИСТКА поиска, чтобы увидеть надпись режима
-                    cur = 0
+                    filter_query = ""
+                    if 'first_open' in locals(): del first_open # Сброс флага для поиска в новом режиме
+                    continue
                 elif key in [ord('j'), curses.KEY_DOWN]: cur = min(len(items)-1, cur + 1)
                 elif key in [ord('k'), curses.KEY_UP]: cur = max(0, cur - 1)
                 elif key == curses.KEY_NPAGE: cur = min(len(items)-1, cur + r_available)
@@ -830,12 +844,30 @@ class MainWindow:
                             json.dump(hist_data, f, ensure_ascii=False, indent=4)
                         all_items = [it for it in all_items if it['path'] != p_to_del]
                 elif key in [10, 13, curses.KEY_ENTER] and items:
-                    self.save_history()
-                    self.filename = os.path.abspath(items[cur]['path'])
+                    new_p = items[cur]['path']
+                    self.save_history() 
+                    self.filename = os.path.abspath(new_p)
+                    
+                    # 1. Загружаем историю новой книги
                     h = hist_data.get(self.filename, {})
                     self.par_index = h.get("pos", 0)
                     self.bookmarks = h.get("bookmarks", [])
-                    break
+                    if not isinstance(self.bookmarks, list): self.bookmarks = []
+
+                    # 2. ПЕРЕЗАГРУЗКА КОНТЕНТА (Важно!)
+                    ext = self.filename.lower()
+                    if ext.endswith('.txt'):
+                        self.content = txt_parse(self.filename, unknown_author=self.tr('meta_unknown'))
+                    elif ext.endswith('.epub'):
+                        self.content = epub_parse(self.filename, unknown_author=self.tr('meta_unknown'), error_label=self.tr('meta_error'))
+                    elif ext.endswith(('.fb2', '.zip')):
+                        self.content = fb2parse(self.filename, unknown_title=self.tr('meta_unknown_title'), unknown_author=self.tr('meta_unknown'))
+                    
+                    self.notes = getattr(self.content, 'notes', {})
+                    
+                    # 3. Пересчитываем макет под новое окно и контент
+                    self.prepare_lines() 
+                    break  
                 elif key in [ord('q'), ord('L')]: break
         except: pass
         self.redraw_scr()
@@ -1291,7 +1323,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.9.1")
+        print("fb2less version 0.9.2")
         return
 
     if args.help:
