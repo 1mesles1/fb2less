@@ -1,80 +1,82 @@
-.TH FB2LESS 1 "5 May 2026" "0.9.0" "fb2less manual"
+.TH FB2LESS 1 "5 May 2026" "0.9.1" "fb2less manual"
 .SH NAME
-fb2less \- Advanced terminal-based eBook reader
+fb2less \- Terminal-based FB2 reader
 .SH SYNOPSIS
 .B fb2less
 [\fIFILE\fR]
 .SH DESCRIPTION
 .B fb2less
-is a terminal eBook reader for FB2, EPUB, and TXT formats, written in Python using the curses library.
-It features ZIP archive support, footnote viewing, auto-scrolling, chapter and percentage navigation, and an advanced bookmark manager. Users can customize background, text, and header colors, text width, and border types. All settings are saved individually for each book. If \fIFILE\fR is not specified, the program opens the last read book from history.
+is a terminal ebook reader for FB2, EPUB, and TXT formats, written in Python using the curses library.
+It supports reading directly from ZIP archives, footnote viewing, auto-scrolling, chapter and percentage navigation, and an advanced bookmarks manager. The enhanced EPUB parser ensures correct rendering of complex layouts and paragraph breaks. Users can customize colors (background, text, and headers), text width, and border styles. Settings are saved individually for each book. If FILE is not specified, the program automatically opens the last read book from history.
 .SH OPTIONS
 .IP "\-h, \-\-help"
-Show help message and exit.
+Show a brief help message and exit.
 .IP "\-v, \-\-version"
-Show version information and exit.
+Show the program version and exit.
 .SH KEYBOARD COMMANDS
 .TP 20
 .IP "o"
-Settings.
+Settings: change interface language, scan path, and library cleanup.
 .IP "K"
-Switch interface language (EN/RU).
+Switch interface language.
 .IP "j, Down / k, Up"
-Scroll text one line down or up.
+Move text one line down or up.
 .IP "d / u"
 Scroll half a page forward or backward.
 .IP "PgUp, Left"
-Scroll one page backward.
+Scroll one page back.
 .IP "Space, PgDn, Right"
 Scroll one page forward.
 .IP "[, ]"
-Jump to the previous or next chapter.
+Jump to the beginning of the previous or next chapter.
 .IP "p"
-Jump to a specific percentage.
+Jump to a specific percentage of the book.
 .IP "i"
-Show book metadata and annotation.
+Display book information, technical metadata, and annotation.
 .IP "Z"
-Scan directory. Recursively searches for books, updates library, and removes missing files.
+Scan the current directory. Recursively searches for books, extracts metadata (author, series), updates the library, and removes entries for non-existent files.
 .IP "L"
-Open library. Shows a list of previously opened books with search support (/ key).
+Open the library. Contains a list of books with search support (via / key) and sorting options.
+.IP "s"
+Change sorting mode within the library: by Title, Author, or Series.
 .IP "Del / d"
-Remove the selected entry from the library (does not delete the actual file).
+Remove the selected entry from the library (does not delete the file from disk).
 .IP "Enter"
-Open the selected book in the library or table of contents.
+Open the selected book in the library or Table of Contents.
 .IP "t"
 Open interactive Table of Contents.
 .IP "f"
-Cycle through footnotes on the current page.
+Sequential viewing of footnotes on the current page in a popup window.
 .IP "/"
 Search for text within the book.
 .IP "n / N"
-Jump to the next or previous search match.
+Find the next or previous search match.
 .IP "m"
-Set a bookmark at the current position.
+Set a bookmark at the current position. Bookmark text is automatically generated from the paragraph start.
 .IP "M"
-Open the Bookmark Manager to jump to or delete existing bookmarks.
+Open the bookmarks manager for navigation or deletion.
 .IP "a"
-Toggle auto-scrolling.
+Toggle auto-scroll on/off.
 .IP "s / S"
-Increase or decrease auto-scroll speed.
+Increase or decrease auto-scroll speed (1-10).
 .IP "c / b / v"
-Change text (c), background (b), or header (v) colors.
+Change Text (c), Background (b), or Header (v) colors.
 .IP "B"
-Toggle border type: window-based, text-based, or none.
+Cycle through border styles: Window-frame, Text-focused, or No borders.
 .IP "e"
-Page flip mode: instant or animated (5 variants).
+Flip mode: instant page change or one of 4 sliding animation modes.
 .IP "\-, ="
-Decrease or increase text block width.
+Decrease or increase the text block width.
 .IP "h"
-Show built-in help window.
+Show the built-in help window with commands grouped by category.
 .IP "q"
-Exit and save current position.
+Exit the program, saving reading position and current settings.
 .SH FILES
 .IP "~/.config/fb2less/"
 User configuration and data directory.
 .IP "~/.config/fb2less/history.json"
-JSON file containing reading history, book positions, bookmarks, and library cache.
+JSON file containing reading history, positions, bookmarks, authors, and book series information.
 .IP "~/.config/fb2less/config.json"
-JSON file for global application settings.
+JSON file with global settings (colors, width, language, scan path).
 .SH AUTHOR
 Written by measles.

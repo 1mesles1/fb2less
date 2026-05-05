@@ -537,9 +537,27 @@ class MainWindow:
                     full_path = os.path.abspath(os.path.join(root_dir, file))
                     
                     if full_path not in hist_data:
-                        # ВАЖНО: поправил путь импорта на актуальный
-                        from .fb2_parser import get_fast_title
-                        title = get_fast_title(full_path)
+                        # Определяем расширение для правильного парсинга метаданных
+                        ext = file.lower()
+                        author = self.tr('meta_unknown')
+                        series = ""
+                        title = file
+
+                        try:
+                            if ext.endswith(('.fb2', '.zip')):
+                                from .fb2_parser import fb2parse
+                                content = fb2parse(full_path)
+                                title = content.meta.get('title', file)
+                                author = content.meta.get('author', author)
+                                series = content.meta.get('series', '')
+                            elif ext.endswith('.epub'):
+                                from .epub_parser import epub_parse
+                                content = epub_parse(full_path)
+                                title = content.meta.get('title', file)
+                                author = content.meta.get('author', author)
+                                series = content.meta.get('series', '')
+                        except:
+                            pass
                         
                         if title in existing_titles:
                             title = "*" + title
@@ -548,8 +566,12 @@ class MainWindow:
                             "pos": 0, "fg": self.fg, "bg": self.bg, 
                             "hc": self.head_color, "width": self.width,
                             "speed": self.scroll_speed, "flip": self.flip_mode,
-                            "border": self.show_border, "title": title,
-                            "lang": self.lang_code
+                            "border": self.show_border, 
+                            "title": str(title),
+                            "author": str(author),
+                            "series": str(series),
+                            "lang": self.lang_code,
+                            "time": time.time()
                         }
                         existing_titles.append(title)
                         found_new += 1
@@ -670,27 +692,26 @@ class MainWindow:
         self.redraw_scr()
 
     def show_library(self):
-        # 1. Используем данные из памяти (уже загружены в __init__ и обновляются в Z)
         hist_data = self.history_data
-        
         all_items = []
-        try:
-            for path, info in hist_data.items():
-                # Пропускаем настройки, чтобы не было ошибки "Deleted: 1"
-                if path == "settings": continue
-                
-                title = info.get('title', os.path.basename(path))
-                all_items.append((path, title))
-        except Exception: 
-            pass # Закрыли блок try
+        for path, info in hist_data.items():
+            if path == "settings": continue
+            all_items.append({
+                'path': path,
+                'title': info.get('title', os.path.basename(path)),
+                'author': info.get('author', self.tr('meta_unknown')),
+                'series': info.get('series', '')
+            })
 
-        all_items.sort(key=lambda x: x[1].lower())
-
+        sort_mode = 0 # 0-Название, 1-Автор, 2-Цикл
+        # Список ключей для перевода названий режимов
+        sort_labels = ['sort_title', 'sort_author', 'sort_series']
+        
         filter_query = ""
         cur = 0
         target = os.path.abspath(self.filename)
-        for i, (path, title) in enumerate(all_items):
-            if os.path.abspath(path) == target:
+        for i, it in enumerate(all_items):
+            if os.path.abspath(it['path']) == target:
                 cur = i; break
 
         r, c = self.screen.getmaxyx()
@@ -704,15 +725,23 @@ class MainWindow:
             lw.bkgd(" ", curses.color_pair(1))
             
             while True:
-                # Фильтрация: ищем и в пути, и в заголовке
                 if filter_query:
-                    items = [it for it in all_items if filter_query.lower() in it[0].lower() or filter_query.lower() in it[1].lower()]
+                    raw_items = [it for it in all_items if filter_query.lower() in it['path'].lower() or filter_query.lower() in it['title'].lower()]
                 else:
-                    items = all_items
+                    raw_items = all_items
+
+                # Логика сортировки
+                if sort_mode == 1:
+                    items = sorted(raw_items, key=lambda x: (x['author'].lower(), x['title'].lower()))
+                elif sort_mode == 2:
+                    items = sorted(raw_items, key=lambda x: (x['series'] == '', x['series'].lower(), x['title'].lower()))
+                else:
+                    items = sorted(raw_items, key=lambda x: x['title'].lower())
 
                 if cur >= len(items): cur = max(0, len(items) - 1)
-                # Если поиск активен — забираем 2 строки у списка
-                r_available = h_win - (7 if filter_query else 4)
+                
+                # Резервируем 5 строк под стабильный подвал (2 строки на инфо + разделители)
+                r_available = h_win - 6
 
                 lw.erase(); lw.box()
                 lib_h = f" {self.tr('ui_lib_title')} "
@@ -724,104 +753,92 @@ class MainWindow:
                 for i in range(r_available):
                     idx = i + off
                     if idx < len(items):
-                        path, title = items[idx]
+                        it = items[idx]
                         style = curses.A_REVERSE if idx == cur else curses.A_NORMAL
                         lw.move(i + 1, 1); lw.addstr(" " * (w_win - 2), style)
                         try:
                             max_t_w = w_win - 4
-                            d_t = title if len(title) <= max_t_w else title[:max_t_w-3] + "..."
+                            if sort_mode == 1: d_name = f"{it['author']} - {it['title']}"
+                            elif sort_mode == 2 and it['series']: d_name = f"({it['series']}) {it['title']}"
+                            else: d_name = it['title']
+
+                            d_t = d_name if len(d_name) <= max_t_w else d_name[:max_t_w-3] + "..."
                             t_attr = curses.color_pair(2) if idx != cur else style
                             lw.addstr(i + 1, 2, d_t, t_attr | curses.A_BOLD)
                         except: pass
-                # --- ДВОЙНОЙ ПОДВАЛ ---
+# --- ПОСТОЯННЫЙ ПОДВАЛ ---
                 lw.attron(curses.color_pair(1))
-                if filter_query:
-                    lw.hline(h_win - 5, 1, curses.ACS_HLINE, w_win - 2)
-                    # Очищаем строку перед выводом поиска
-                    lw.move(h_win - 4, 1); lw.addstr(" " * (w_win - 2))
-                    p_prompt = self.tr('lib_search')
-                    lw.addstr(h_win - 4, 2, f"{p_prompt}{filter_query}"[:w_win-4], curses.color_pair(2) | curses.A_BOLD)
+                # Верхняя черта подвала (всегда на месте)
+                lw.hline(h_win - 5, 1, curses.ACS_HLINE, w_win - 2)
                 
+                # Строка 1: Поиск ИЛИ Режим сортировки (Центрировано)
+                lw.move(h_win - 4, 1); lw.addstr(" " * (w_win - 2))
+                if filter_query:
+                    p_text = f"{self.tr('lib_search')}{filter_query}"
+                    # Если это поиск — добавляем цвет заголовка и жирность
+                    attr = curses.color_pair(2) | curses.A_BOLD
+                else:
+                    p_text = f"{self.tr('lib_sort')}{self.tr(sort_labels[sort_mode])}"
+                    # Если это сортировка — цвет обычного текста
+                    attr = curses.color_pair(1)
+                
+                # Печать по центру с выбранным атрибутом
+                start_x = max(2, (w_win - len(p_text)) // 2)
+                lw.addstr(h_win - 4, start_x, p_text[:w_win-4], attr)
+                
+                # Строка 2: Путь к файлу
                 lw.hline(h_win - 3, 1, curses.ACS_HLINE, w_win - 2)
-                # Очищаем строку перед выводом пути
                 lw.move(h_win - 2, 1); lw.addstr(" " * (w_win - 2))
                 if items:
-                    path, title = items[cur]
+                    path = items[cur]['path']
                     display_path = path if len(path) < w_win - 6 else "..." + path[-(w_win-7):]
                     lw.addstr(h_win - 2, 2, display_path)
                 lw.attroff(curses.color_pair(1))
 
                 lw.refresh()
                 key = lw.getch()
-                if key in [ord('.'), 1102]: key = ord('/')
 
+                if key in [ord('.'), 1102]: key = ord('/')
                 if key == ord('/'):
                     p_str = self.tr('lib_search')
-                    max_in = w_win - len(p_str) - 4
-                    # Принудительная зачистка зоны ввода
+                    # При поиске оставляем подсветку color_pair(2), как ты просил
                     lw.move(h_win - 4, 1); lw.addstr(" " * (w_win - 2))
-                    lw.attron(curses.color_pair(1)); lw.hline(h_win - 5, 1, curses.ACS_HLINE, w_win - 2)
-                    lw.addstr(h_win - 4, 2, p_str, curses.color_pair(2) | curses.A_BOLD); lw.attroff(curses.color_pair(1))
+                    lw.addstr(h_win - 4, 2, p_str, curses.color_pair(2) | curses.A_BOLD)
                     curses.echo(); curses.curs_set(1)
                     try:
-                        raw = lw.getstr(h_win - 4, 2 + len(p_str), max_in)
+                        raw = lw.getstr(h_win - 4, 2 + len(p_str), w_win - len(p_str) - 4)
                         filter_query = raw.decode('utf-8').strip()
                     except: pass
                     curses.noecho(); curses.curs_set(0); cur = 0
-                elif key == 27:
+                elif key == 27: # ESC
                     if filter_query: filter_query = ""; cur = 0
                     else: break
+                elif key in [ord('s'), 1099]: # Сортировка
+                    sort_mode = (sort_mode + 1) % 3
+                    filter_query = "" # ОЧИСТКА поиска, чтобы увидеть надпись режима
+                    cur = 0
                 elif key in [ord('j'), curses.KEY_DOWN]: cur = min(len(items)-1, cur + 1)
                 elif key in [ord('k'), curses.KEY_UP]: cur = max(0, cur - 1)
                 elif key == curses.KEY_NPAGE: cur = min(len(items)-1, cur + r_available)
                 elif key == curses.KEY_PPAGE: cur = max(0, cur - r_available)
-                elif key == curses.KEY_HOME: cur = 0
-                elif key == curses.KEY_END: cur = len(items) - 1
                 elif key in [ord('d'), curses.KEY_DC] and items:
-                    p_to_del, _ = items[cur]
+                    p_to_del = items[cur]['path']
                     if p_to_del in hist_data:
                         del hist_data[p_to_del]
-                        # ВНИМАНИЕ ТУТ:
-                        with open(self.history_file, "w") as f: 
+                        self.history_data = hist_data
+                        with open(self.history_file, "w", encoding='utf-8') as f:
                             json.dump(hist_data, f, ensure_ascii=False, indent=4)
-                        all_items = [it for it in all_items if it[0] != p_to_del]
-                        # Нужно обновить и self.history_data, чтобы MainWindow о нем забыл
-                        if hasattr(self, 'history_data') and p_to_del in self.history_data:
-                            del self.history_data[p_to_del]
-                        with open(self.history_file, "w") as f: json.dump(hist_data, f)
-                        all_items = [it for it in all_items if it[0] != p_to_del]
+                        all_items = [it for it in all_items if it['path'] != p_to_del]
                 elif key in [10, 13, curses.KEY_ENTER] and items:
-                    new_p, _ = items[cur]
-                    self.save_history() # Сохраняем текущую
-                    self.filename = os.path.abspath(new_p)
-                    
-                    # Загружаем прогресс выбранной книги
+                    self.save_history()
+                    self.filename = os.path.abspath(items[cur]['path'])
                     h = hist_data.get(self.filename, {})
                     self.par_index = h.get("pos", 0)
                     self.bookmarks = h.get("bookmarks", [])
-                    if not isinstance(self.bookmarks, list):
-                        self.bookmarks = []
-                    
-                    # Язык НЕ трогаем, он подхватится из глобального self.lang_code
-                    
-                    # Перезагружаем парсеры
-                    ext = self.filename.lower()
-                    if ext.endswith('.epub'): 
-                        self.content = epub_parse(self.filename, self.tr('meta_unknown'), self.tr('meta_error'))
-                    elif ext.endswith(('.fb2', '.zip')): 
-                        self.content = fb2parse(self.filename, self.tr('meta_unknown_title'), self.tr('meta_unknown'))
-                    else: 
-                        self.content = txt_parse(self.filename, self.tr('meta_unknown'))
-                    
-                    self.notes = getattr(self.content, 'notes', {})
-                    self.prepare_lines()
-                    return
-                elif key in [ord('q'), ord('L')]: 
                     break
-        except: # Закрываем try из show_library
-            pass
+                elif key in [ord('q'), ord('L')]: break
+        except: pass
         self.redraw_scr()
-
 
     def show_bookmarks(self):
         if not self.bookmarks: return
@@ -1274,7 +1291,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.9.0")
+        print("fb2less version 0.9.1")
         return
 
     if args.help:

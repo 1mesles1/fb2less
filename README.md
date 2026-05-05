@@ -1,15 +1,28 @@
-# fb2less (v0.9.0)
-**3 May 2026**
+# fb2less (v0.9.1)
+**5 May 2026**
 
 Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
 ## Features
-- **Formats**: FB2, EPUB, TXT (including ZIP archives).
-- **Localization**: Full English, German, and Russian support." (toggle with `K`).
-- **Navigation**: Chapter jumps, progress bar `[███  ]`, and in-book search.
-- **Library**: Built-in reading history with search support and per-book settings.
-- **Customization**: 5 flip animation modes, colors, text width, and borders.
-- **Bilingual Documentation**: Manual pages (man) available in both English and Russian.
+- **Multi-format Support**: FB2, EPUB, and TXT. Direct reading from ZIP archives.
+- **Smart Parsing**: Enhanced EPUB rendering that handles complex layouts and properly reconstructs paragraph breaks.
+- **Multilingual Interface**: Full support for **English**, **Russian**, and **German** (toggle instantly with `K`).
+- **Advanced Library**:
+  - Persistent reading history and per-book settings.
+  - Interactive library manager (`L`) with search and smart sorting.
+  - **Sorting**: Organize your collection by **Title**, **Author**, or **Series** (`s`).
+- **Rich Navigation**:
+  - Chapter navigation (`[` / `]`) and Table of Contents (`t`).
+  - Search within books (`/`) and bookmarks manager (`M`).
+  - Interactive status bar with progress percentage and visual bar `[███  ]`.
+- **Visual Customization**:
+  - **3 Border Styles**: Toggle between no borders, a window-frame, or text-focused borders (`B`) for a focused reading experience.
+  - **5 Flip Animations**: Various page-turn effects (`e`) from instant to sliding.
+  - **Dynamic Theming**: On-the-fly adjustments for Text, Background, and Header colors (`c`, `b`, `v`).
+  - **Adjustable Layout**: Change text width and alignment to fit any terminal size.
+- **Auto-scroll**: Hands-free reading with adjustable speed.
+- **Footnotes**: Instant access to footnotes and links in a popup window (`f`).
+- **Documentation**: Manual pages (man) available in both English and Russian.
 
 ## Screenshots
 [<img src="screenshots/01.png" width="400">](screenshots/01.png) [<img src="screenshots/02.png" width="400">](screenshots/02.png)
