@@ -1274,7 +1274,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.8.9")
+        print("fb2less version 0.9.0")
         return
 
     if args.help:
@@ -1282,6 +1282,7 @@ def main():
         print("Usage: fb2less [FILE]")
         print("\nControls:")
         print("  h            - help")
+        print("  o            - Settings")
         print("  L            - library")
         print("  q            - exit")
         return

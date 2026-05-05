@@ -33,7 +33,7 @@
         " c, b               - TEXT- / HINTERGRUNDfarbe",
         " v                  - ÜBERSCHRIFTENfarbe",
         " B                  - Rahmen (kein/Fenster/Text)",
-        " e                  - Blättern-Modus (STD/B:1/B:2/B:3)",
+        " e                  - Blättern-Modus (STD, B:1 - B:4)",
         " q                  - BEENDEN"
     ],
     "ui_toc_title": "INHALTSVERZEICHNIS",

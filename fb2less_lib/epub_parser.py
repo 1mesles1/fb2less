@@ -82,7 +82,7 @@ class EPUBParser:
                         raw_data = z.read(f_path).decode('utf-8', 'ignore')
                         raw_data = raw_data.replace('&nbsp;', ' ').replace('&shy;', '')
                         raw_data = re.sub(r'&(?!(amp|lt|gt|quot|apos);)', '&amp;', raw_data)
-                        raw_data = raw_data.replace('<br/>', '\n').replace('<br>', '\n')
+                        raw_data = raw_data.replace('<br/>', '\n\n').replace('<br>', '\n\n')
                         
                         root = ET.fromstring(raw_data)
                         body = root.find(".//{*}body") or root
@@ -133,14 +133,28 @@ class EPUBParser:
                                         added_titles.append(clean_low)
                                         if len(added_titles) > 20: added_titles.pop(0)
                                 elif is_poem:
+                                    # ПРАВКА: Добавляем пустую строку ПЕРЕД стихом, чтобы он не прилипал
+                                    self.paragraphs.append(('body', "")) 
+                                    
                                     for line in text_block.split('\n'):
                                         clean_line = line.strip()
                                         if clean_line:
                                             self.paragraphs.append(('poem', clean_line))
+                                    
+                                    # Отступ ПОСЛЕ стиха (тоже полезно)
+                                    self.paragraphs.append(('body', "")) 
+                                    
                                 else:
-                                    self.paragraphs.append(('body', " ".join(text_block.split())))
-                        
-                        self.paragraphs.append(('body', ""))
+                                    if text_block.strip():
+                                        # Разбиваем по нашим меткам <br> (\n\n)
+                                        parts = re.split(r'\n\s*\n', text_block.strip())
+                                        for part in parts:
+                                            # Склеиваем "лесенку" внутри каждого куска
+                                            clean_part = " ".join(part.split())
+                                            if clean_part:
+                                                # Добавляем как один абзац без лишней пустой строки в конце
+                                                self.paragraphs.append(('body', clean_part))
+
                     except: continue
         except Exception as e:
             self.paragraphs = [('body', f"Error: {e}")]

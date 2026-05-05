@@ -33,7 +33,7 @@
         " c, b               - TEXT / BACKGROUND color",
         " v                  - HEADINGS color",
         " B                  - Border style (none/window/text)",
-        " e                  - Page flip mode (STD/B:1/B:2/B:3)",
+        " e                  - Page flip mode (STD, B:1 - B:4)",
         " q                  - EXIT"
     ],
     "ui_toc_title": "TABLE OF CONTENTS",
