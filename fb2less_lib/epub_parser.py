@@ -2,21 +2,19 @@ import zipfile
 import os
 import xml.etree.ElementTree as ET
 from urllib.parse import unquote
+import re
 
 class EPUBParser:
-    # Добавляем аргумент unknown_author
     def __init__(self, filename, unknown_author="Unknown"):
         self.paragraphs = []
         self.notes = {}
         self.meta = {
-            'title': os.path.basename(filename), 
-            'author': unknown_author, # Используем переменную
+            'title': str(os.path.basename(filename)), 
+            'author': str(unknown_author),
             'series': '',
             'annotation': ''
         }
         self.encoding = 'utf-8'
-        # Передаем ее дальше в метод _parse, если нужно, 
-        # но тут она используется только в заглушке __init__
         self._parse(filename)
 
     def _parse(self, filename):
@@ -32,14 +30,16 @@ class EPUBParser:
                 for el in opf_xml.iter():
                     tag = el.tag.split('}')[-1].lower()
                     if tag == 'title':
-                        self.meta['title'] = " ".join("".join(el.itertext()).split()).strip()
+                        val = "".join(el.itertext()).strip()
+                        if val: self.meta['title'] = str(val)
                     elif tag == 'creator':
-                        self.meta['author'] = " ".join("".join(el.itertext()).split()).strip()
+                        val = "".join(el.itertext()).strip()
+                        if val: self.meta['author'] = str(val)
 
                 manifest = {it.get("id"): it.get("href") for it in opf_xml.findall(".//{*}item")}
                 spine = [it.get("idref") for it in opf_xml.findall(".//{*}itemref")]
 
-                # 3. ОГЛАВЛЕНИЕ NCX
+                # 3. Список названий глав из NCX
                 toc_titles = set()
                 try:
                     ncx_item = opf_xml.find(".//{*}item[@media-type='application/x-dtbncx+xml']")
@@ -48,87 +48,104 @@ class EPUBParser:
                         ncx_xml = ET.fromstring(z.read(ncx_p))
                         for t_node in ncx_xml.findall(".//{*}text"):
                             if t_node.text:
-                                toc_titles.add(t_node.text.strip().lower())
+                                toc_titles.add(" ".join(t_node.text.split()).strip().lower())
                 except: pass
 
-                # 4. СБОР ВСЕХ СНОСОК (ID) - Умный фильтр
+                # --- 4. УМНЫЙ СБОР ТЕКСТОВ СНОСОК ---
                 for h in manifest.values():
-                    if not (h.lower().endswith('.html') or h.lower().endswith('.xhtml')): continue
+                    h_lower = h.lower()
+                    if not (h_lower.endswith('.html') or h_lower.endswith('.xhtml')): continue
                     try:
                         f_p = os.path.join(opf_dir, unquote(h)).replace('\\', '/')
-                        h_root = ET.fromstring(z.read(f_p))
+                        h_raw = z.read(f_p).decode('utf-8', 'ignore')
+                        h_root = ET.fromstring(h_raw)
                         for el in h_root.iter():
                             nid = el.get('id')
                             if nid:
+                                clean_id = nid.lstrip('#')
                                 note_txt = "".join(el.itertext()).strip()
-                                tag = el.tag.split('}')[-1].lower()
-                                if 0 < len(note_txt) < 2000 and tag not in ['body', 'html', 'section']:
-                                    self.notes[nid] = " ".join(note_txt.split())
+                                # Фильтруем: не берем слишком длинный текст и заголовки глав
+                                if 1 < len(note_txt) < 1500:
+                                    is_note_file = any(x in h_lower for x in ['note', 'reft', 'anc', 'nt'])
+                                    is_note_id = any(x in clean_id.lower() for x in ['n', 'fn', 'ref'])
+                                    if is_note_file or is_note_id or clean_id.isdigit():
+                                        self.notes[clean_id] = " ".join(note_txt.split())
                     except: continue
-# 5. СБОР ТЕКСТА
+
+                # --- 5. СБОР ТЕКСТА КНИГИ ---
+                added_titles = []
                 for item_id in spine:
                     if item_id not in manifest: continue
                     f_path = os.path.join(opf_dir, unquote(manifest[item_id])).replace('\\', '/')
                     
                     try:
                         raw_data = z.read(f_path).decode('utf-8', 'ignore')
-                        raw_data = raw_data.replace('<br/>', '\n').replace('<br>', '\n').replace('</p>', '\n</p>')
+                        raw_data = raw_data.replace('&nbsp;', ' ').replace('&shy;', '')
+                        raw_data = re.sub(r'&(?!(amp|lt|gt|quot|apos);)', '&amp;', raw_data)
+                        raw_data = raw_data.replace('<br/>', '\n').replace('<br>', '\n')
                         
                         root = ET.fromstring(raw_data)
-                        current_container_type = 'body'
+                        body = root.find(".//{*}body") or root
 
-                        for el in root.iter():
+                        for el in body.iter():
                             tag = el.tag.split('}')[-1].lower()
                             cls = (el.get('class') or '').lower()
                             
-                            if tag == 'div':
-                                current_container_type = 'epigraph' if 'epigraph' in cls else 'body'
-                                if el.find('.//{*}p') is not None: continue
-
                             if tag in ['p', 'h1', 'h2', 'h3', 'h4', 'li', 'blockquote', 'div']:
-                                if tag == 'div' and el.find('.//{*}p') is not None: continue
-                                
-                                # СБОР ТЕКСТА С ПОМЕТКОЙ ССЫЛОК
+                                if any(child.tag.split('}')[-1].lower() in ['p', 'div', 'h1', 'h2', 'li'] for child in el):
+                                    continue
+
                                 pieces = []
                                 if el.text: pieces.append(el.text)
                                 for child in el:
                                     c_tag = child.tag.split('}')[-1].lower()
-                                    if c_tag == 'a':
+                                    if c_tag == 'br': 
+                                        pieces.append('\n')
+                                    elif c_tag == 'a':
                                         lbl = "".join(child.itertext()).strip()
                                         href = child.get('href', '')
-                                        tid = href.split('#')[-1] if '#' in href else ""
-                                        # Используем ID как метку для reader.py
-                                        pieces.append(f" [{tid if tid else lbl}]")
+                                        tid = (href.split('#')[-1] if '#' in href else "").lstrip('#')
+                                        
+                                        if lbl and len(lbl) < 10:
+                                            # Избегаем двойных скобок [[ ]]
+                                            display_lbl = lbl if (lbl.startswith('[') and lbl.endswith(']')) else f"[{lbl}]"
+                                            pieces.append(f" {display_lbl}")
+                                            # Связываем текст ссылки с ID в словаре для кнопки 'f'
+                                            clean_key = lbl.strip('[]')
+                                            if tid in self.notes:
+                                                self.notes[clean_key] = self.notes[tid]
+                                        else:
+                                            pieces.append(lbl if lbl else tid)
                                     else:
                                         pieces.append("".join(child.itertext()))
                                     if child.tail: pieces.append(child.tail)
                                 
                                 text_block = "".join(pieces).strip()
-                                
-                                if text_block:
-                                    sub_parts = text_block.split('\n')
-                                    for part in sub_parts:
-                                        clean_part = " ".join(part.split()).strip()
-                                        if clean_part:
-                                            is_in_toc = clean_part.lower() in toc_titles
-                                            if tag.startswith('h') or is_in_toc:
-                                                p_type = 'title'
-                                            elif 'epigraph' in cls or current_container_type == 'epigraph':
-                                                p_type = 'epigraph'
-                                            else:
-                                                p_type = 'body'
-                                            
-                                            self.paragraphs.append((p_type, clean_part))
+                                if not text_block: continue
+
+                                clean_low = " ".join(text_block.split()).lower()
+                                is_title = tag.startswith('h') or clean_low in toc_titles
+                                is_poem = any(x in cls for x in ['poem', 'verse', 'stanza', 'v'])
+
+                                if is_title:
+                                    if clean_low not in added_titles:
+                                        self.paragraphs.append(('title', " ".join(text_block.split())))
+                                        added_titles.append(clean_low)
+                                        if len(added_titles) > 20: added_titles.pop(0)
+                                elif is_poem:
+                                    for line in text_block.split('\n'):
+                                        clean_line = line.strip()
+                                        if clean_line:
+                                            self.paragraphs.append(('poem', clean_line))
+                                else:
+                                    self.paragraphs.append(('body', " ".join(text_block.split())))
                         
                         self.paragraphs.append(('body', ""))
                     except: continue
         except Exception as e:
-            # error_label мы добавим в __init__ или передадим в метод
-            err_prefix = getattr(self, 'error_label', 'Error')
-            self.paragraphs = [('body', f"{err_prefix}: {e}")]
+            self.paragraphs = [('body', f"Error: {e}")]
 
 def epub_parse(filename, unknown_author="Unknown", error_label="Error"):
     parser = EPUBParser(filename, unknown_author)
     parser.error_label = error_label
     return parser
-

@@ -1029,11 +1029,13 @@ class MainWindow:
                         self.screen.addstr(y, margin, text[:w_curr], attr)
                         
                         # 2. ПОДСВЕТКА СНОСОК (Цветом заголовков глав)
-                        for m in re.finditer(r'\[.*?\]', text):
+                        for m in re.finditer(r'\[(.*?)\]', text):
                             start, end = m.start(), m.end()
-                            if start < w_curr:
+                            content = m.group(1) # Текст внутри скобок
+                            
+                            # Если внутри скобок меньше 10 символов — считаем сноской
+                            if start < w_curr and len(content) < 10:
                                 note_label = text[start:min(end, w_curr)]
-                                # Используем пару 2 (цвет глав)
                                 self.screen.addstr(y, margin + start, note_label, curses.color_pair(2) | curses.A_BOLD)
 
                         # 3. ПОДСВЕТКА ПОИСКА (Поверх всего, инверсией)
@@ -1272,7 +1274,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.8.7")
+        print("fb2less version 0.8.9")
         return
 
     if args.help:

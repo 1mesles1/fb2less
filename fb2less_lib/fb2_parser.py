@@ -7,7 +7,7 @@ class FB2Parser:
     def __init__(self, filename, unknown_title="Неизвестно", unknown_author="Неизвестный автор"):
         self.paragraphs = []
         self.notes = {}
-        self.toc = []  # Список кортежей: (Название главы, индекс в paragraphs)
+        self.toc = []
         self.meta = {
             'title': unknown_title, 
             'author': unknown_author, 
@@ -52,7 +52,6 @@ class FB2Parser:
         for el in root.iter():
             el.tag = el.tag.split('}')[-1]
 
-        # Метаданные
         ti = root.find(".//title-info")
         if ti is not None:
             t_el = ti.find("book-title")
@@ -89,6 +88,7 @@ class FB2Parser:
         for body in root.findall("body"):
             if body.get('name') != 'notes':
                 self._walk(body)
+
     def _walk(self, element, mode='body', is_section=False):
         for child in element:
             tag = child.tag
@@ -110,33 +110,26 @@ class FB2Parser:
             elif tag == 'stanza': new_mode = 'poem'
             elif tag == 'subtitle': new_mode = 'subtitle'
 
-            # Если внутри блока (epigraph, cite) есть вложенные <p>, 
-            # мы можем решить: склеивать их или нет.
-            
             if tag in ('p', 'v', 'text-author', 'subtitle'):
                 text = self._get_text_with_notes(child)
                 if text:
+                    # Проверяем, весь ли параграф — это курсив
                     emp = child.find('emphasis')
                     is_full_emphasis = (emp is not None and (child.text is None or not child.text.strip()))
 
                     if new_mode == 'poem': 
                         text = "    " + text
                     
-                    # Если это блок курсива и предыдущий был таким же — клеим
-                    if is_full_emphasis and self.paragraphs and self.paragraphs[-1][0] == 'emphasis_block':
-                        prev_mode, prev_text = self.paragraphs[-1]
-                        self.paragraphs[-1] = ('emphasis_block', prev_text + " " + text)
-                    elif is_full_emphasis:
-                        self.paragraphs.append(('emphasis_block', text))
+                    # ПРАВКА ТУТ: Убрали склейку emphasis_block, теперь каждый <p> — новая строка
+                    if is_full_emphasis:
+                        p_type = 'emphasis_block'
                     else:
-                        # УБРАЛИ символ ">" для цитат и эпиграфов
-                        # Если это автор, помечаем специальным типом
                         p_type = 'author' if tag == 'text-author' else new_mode
-                        self.paragraphs.append((p_type, text))
-                        
-                        # Если это был автор, добавляем пустую строку сразу за ним
-                        if tag == 'text-author':
-                            self.paragraphs.append(('body', ''))
+                    
+                    self.paragraphs.append((p_type, text))
+                    
+                    if tag == 'text-author':
+                        self.paragraphs.append(('body', ''))
             
             elif tag == 'empty-line':
                 self.paragraphs.append(('body', ''))
@@ -148,7 +141,8 @@ class FB2Parser:
     def _get_text_with_notes(self, el):
         full_text = el.text or ""
         for child in el:
-            if child.tag == 'a':
+            tag = child.tag
+            if tag == 'a':
                 note_id = ""
                 for attr, val in child.attrib.items():
                     if attr.endswith('href'):
@@ -169,6 +163,7 @@ class FB2Parser:
 
 def fb2parse(filename, unknown_title="Unknown", unknown_author="Unknown Author"): 
     return FB2Parser(filename, unknown_title, unknown_author)
+
 def get_fast_title(filename):
     try:
         raw = b""
