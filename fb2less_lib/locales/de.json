@@ -30,6 +30,7 @@
         " L                  - Bibliothek öffnen",
         " Z                  - Ordner scannen (neue Bücher)",
         " s                  - Sortierung (in Bibliothek)",
+        " d / Del            - Buch aus Liste entfernen",
         " i                  - Buch-Info",
         "",
         "----------- EINSTELLUNGEN & OPTIK -----------",
@@ -39,6 +40,7 @@
         " c / b              - TEXT- / HINTERGRUNDfarbe",
         " v                  - ÜBERSCHRIFTENfarbe",
         " B                  - Rahmenstil",
+        " H                  - Statusleiste umschalten",
         " e                  - Umblättermodus",
         "",
         "----------- AUTO-SCROLL -----------",
@@ -85,5 +87,8 @@
     "sort_title": "Titel",
     "sort_author": "Autor",
     "sort_series": "Reihe",
+    "set_status": "Statusleiste",
+    "ui_on": "AN",
+    "ui_off": "AUS",
     "ui_notes_section": "--- FUSSNOTEN ---"
 }

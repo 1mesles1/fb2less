@@ -30,6 +30,7 @@
         " L                  - Open library",
         " Z                  - Scan folder for new books",
         " s                  - Sort (inside library)",
+        " d / Del            - Remove book from list",
         " i                  - Book info",
         "",
         "----------- SETTINGS & APPEARANCE -----------",
@@ -39,6 +40,7 @@
         " c / b              - TEXT / BACKGROUND color",
         " v                  - HEADERS color",
         " B                  - Border style",
+        " H                  - Toggle Status Bar",
         " e                  - Flip mode",
         "",
         "----------- AUTO SCROLL -----------",
@@ -85,5 +87,8 @@
     "sort_title": "Title",
     "sort_author": "Author",
     "sort_series": "Series",
+    "set_status": "Status bar",
+    "ui_on": "ON",
+    "ui_off": "OFF",
     "ui_notes_section": "--- FOOTNOTES ---"
 }

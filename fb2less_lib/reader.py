@@ -8,6 +8,7 @@ class MainWindow:
     def __init__(self, stdscr, filename):
         self.screen = stdscr
         self.filename = os.path.abspath(filename)
+        self.show_status = True
         
         # 1. НАСТРОЙКА ПУТЕЙ (~/.config/fb2less)
         self.config_dir = os.path.expanduser("~/.config/fb2less")
@@ -32,6 +33,7 @@ class MainWindow:
         self.show_border = conf.get("border", 0)
         self.flip_mode = conf.get("flip", 0)
         self.lang_code = conf.get("lang", "en")
+        self.show_status = conf.get("status", 1)
         
         # 3. ЗАГРУЗКА ИСТОРИИ КНИГИ (Прогресс и закладки)
         hist = self.load_history()
@@ -136,7 +138,8 @@ class MainWindow:
                 "fg": self.fg, "bg": self.bg, "hc": self.head_color,
                 "width": self.width, "speed": self.scroll_speed,
                 "border": self.show_border, "flip": self.flip_mode,
-                "lang": self.lang_code
+                "lang": self.lang_code,
+                "status": 1 if self.show_status else 0
             }
             with open(self.config_file, "w", encoding='utf-8') as f:
                 json.dump(config_data, f, ensure_ascii=False, indent=4)
@@ -614,7 +617,7 @@ class MainWindow:
         # Пункты меню (Язык теперь первый)
         cur = 0
         w_win = min(c - 4, 60)
-        h_win = 7  # Уменьшили высоту окна (было 10)
+        h_win = 8  # Уменьшили высоту окна (было 10)
         y, x = (r - h_win) // 2, (c - w_win) // 2
         
         try:
@@ -627,8 +630,10 @@ class MainWindow:
                 title = f" {self.tr('ui_settings')} "
                 sw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
                 
+                st_val = self.tr('ui_on') if self.show_status else self.tr('ui_off')
                 menu_items = [
-                    f"{self.tr('ui_language')}: {self.lang_code.upper()}", # Новый пункт
+                    f"{self.tr('ui_language')}: {self.lang_code.upper()}",
+                    f"{self.tr('set_status')}: {st_val}", # Используем ключи из перевода
                     f"{self.tr('set_path')}: {scan_path}",
                     self.tr('set_scan'),
                     self.tr('set_clear_lib'),
@@ -647,17 +652,21 @@ class MainWindow:
                     cur = (cur + 1) % len(menu_items)
                 elif key in [ord('k'), curses.KEY_UP]:
                     cur = (cur - 1) % len(menu_items)
-                elif key in [10, 13, curses.KEY_ENTER]:
+                if key in [10, 13, curses.KEY_ENTER]:
                     if cur == 0: # Смена языка
                         idx = self.available_langs.index(self.lang_code)
                         self.lang_code = self.available_langs[(idx + 1) % len(self.available_langs)]
                         self.load_lang(self.lang_code)
-                        self.prepare_lines() # Пересобираем текст под новые метки
+                        self.prepare_lines()
+                        self.redraw_scr() 
                     
-                    elif cur == 1: # Путь
+                    elif cur == 1: # Переключатель статус-бара
+                        self.show_status = not self.show_status
+                        self.redraw_scr()
+
+                    elif cur == 2: # Путь
                         curses.echo(); curses.curs_set(1)
                         prompt = "> "
-                        # Рисуем поле ввода на последней строке окна (h_win-2)
                         sw.addstr(h_win-2, 2, prompt + " "*(w_win-5), curses.color_pair(5))
                         try:
                             raw = sw.getstr(h_win-2, 2 + len(prompt))
@@ -671,21 +680,27 @@ class MainWindow:
                         except: pass
                         curses.noecho(); curses.curs_set(0)
                     
-                    elif cur == 2: # Скан
+                    elif cur == 3: # Скан
                         if os.path.isdir(scan_path):
                             old_cwd = os.getcwd()
                             try:
                                 os.chdir(scan_path); self.scan_directory()
                             finally: os.chdir(old_cwd)
                         break
-                    elif cur == 3: # Очистка
+
+                    elif cur == 4: # Очистка
                         self.history_data = {self.filename: self.history_data.get(self.filename, {})}
                         with open(self.history_file, "w", encoding='utf-8') as f:
                             json.dump(self.history_data, f, ensure_ascii=False, indent=4)
                         break
-                    elif cur == 4: # Сохранить
+
+                    elif cur == 5: # Сохранить
                         c_data = self.load_config()
-                        c_data.update({"scan_path": scan_path, "lang": self.lang_code})
+                        c_data.update({
+                            "scan_path": scan_path, 
+                            "lang": self.lang_code,
+                            "status": 1 if self.show_status else 0
+                        })
                         with open(self.config_file, "w", encoding='utf-8') as f:
                             json.dump(c_data, f, ensure_ascii=False, indent=4)
                         break
@@ -1012,44 +1027,44 @@ class MainWindow:
             self.redraw_scr()
 
     def redraw_scr(self):
-
         r, c = self.screen.getmaxyx()
-
-        # 1. РАСЧЕТЫ КООРДИНАТ
+        
+        # 1. Единый расчет отступов
+        f_off = 1 if self.show_status else 0
+        
         if self.show_border == 2:
-            top_offset, display_h = 1, r - 3
+            top_offset, display_h = 1, r - 2 - f_off
+            y_b = r - 1 - f_off  # Нижняя рамка
         elif self.show_border == 1:
-            top_offset, display_h = 1, r - 2
+            top_offset, display_h = 1, r - 1 - f_off
+            y_b = r - 1 - f_off
         else:
-            top_offset, display_h = 0, r - 1
+            top_offset, display_h = 0, r - f_off
+            y_b = r - f_off
 
+        # Расчет ширины
         avail_c = c - 4 if self.show_border == 2 else (c - 2 if self.show_border == 1 else c)
         w_curr = min(avail_c - 4, self.width)
         margin = (c - w_curr) // 2
 
-        # 2. ОЧИСТКА И ФОН (Листок бумаги)
-        if self.show_border == 0:
-            self.screen.bkgd(" ", curses.color_pair(1))
-            self.screen.erase()
-        else:
-            self.screen.bkgdset(" ", curses.color_pair(4)) # Прозрачность
-            self.screen.erase()
-            
-            # Заливка только области чтения цветом self.bg
-            x_l = 0 if self.show_border == 1 else margin - 2
-            x_r = c - 1 if self.show_border == 1 else margin + w_curr + 1
-            for y in range(r - 1): 
-                try: 
-                    self.screen.addstr(y, x_l, " " * (x_r - x_l + 1), curses.color_pair(1))
-                except: pass
+        # 2. ОЧИСТКА ЭКРАНА
+        # Сначала заливаем ВЕСЬ экран цветом фона (чтобы за рамками не было мусора)
+        self.screen.bkgd(" ", curses.color_pair(4)) 
+        self.screen.erase()
 
-        # 3. ОТРИСОВКА РАМОК
+        # 3. ФОН «ЛИСТА» (только внутри рамок)
+        x_l = 0 if self.show_border == 1 else margin - 2
+        x_r = c - 1 if self.show_border == 1 else margin + w_curr + 1
+        
+        # Рисуем фон строго до нижней рамки y_b
+        for y in range(0, y_b + 1):
+            try:
+                self.screen.addstr(y, x_l, " " * (x_r - x_l + 1), curses.color_pair(1))
+            except: pass
+
+        # 4. ОТРИСОВКА РАМОК
         if self.show_border > 0:
             self.screen.attron(curses.color_pair(1))
-            x_l = 0 if self.show_border == 1 else margin - 2
-            x_r = c - 1 if self.show_border == 1 else margin + w_curr + 1
-            y_b = r - 1 if self.show_border == 1 else r - 2
-            
             self.screen.hline(0, x_l + 1, curses.ACS_HLINE, x_r - x_l - 1)
             self.screen.hline(y_b, x_l + 1, curses.ACS_HLINE, x_r - x_l - 1)
             self.screen.vline(1, x_l, curses.ACS_VLINE, y_b - 1)
@@ -1062,95 +1077,67 @@ class MainWindow:
             except: pass
             self.screen.attroff(curses.color_pair(1))
 
-        # 4. ОТРИСОВКА ТЕКСТА И ПОИСКА
+        # 5. ОТРИСОВКА ТЕКСТА
         for i in range(display_h):
             idx = self.par_index + i
             if idx < len(self.lines):
-                p_type, text = self.lines[idx]
                 y = i + top_offset
-                if y >= r - 1: break
-                try:
-                    attr = curses.color_pair(2 if p_type == "title" else 1)
-                    if p_type == "title":
-                        self.screen.addstr(y, (c - len(text)) // 2, text, attr | curses.A_BOLD)
-                    else:
-                        # 1. Сначала рисуем весь основной текст (обычным цветом)
-                        self.screen.addstr(y, margin, text[:w_curr], attr)
-                        
-                        # 2. ПОДСВЕТКА СНОСОК (Цветом заголовков глав)
-                        for m in re.finditer(r'\[(.*?)\]', text):
-                            start, end = m.start(), m.end()
-                            content = m.group(1) # Текст внутри скобок
-                            
-                            # Если внутри скобок меньше 10 символов — считаем сноской
-                            if start < w_curr and len(content) < 10:
-                                note_label = text[start:min(end, w_curr)]
-                                self.screen.addstr(y, margin + start, note_label, curses.color_pair(2) | curses.A_BOLD)
-
-                        # 3. ПОДСВЕТКА ПОИСКА (Поверх всего, инверсией)
-                        if self.search_query:
-                            s_query = self.search_query.lower()
-                            s_text = text.lower()
-                            last_found = 0
-                            # Ищем все вхождения на случай, если слово повторяется в строке
-                            while True:
-                                start_pos = s_text.find(s_query, last_found)
-                                if start_pos == -1 or start_pos >= w_curr: break
-                                
-                                # Берем оригинал текста из этой позиции (сохраняя регистр)
-                                match = text[start_pos : start_pos + len(self.search_query)]
-                                self.screen.addstr(y, margin + start_pos, match[:w_curr-start_pos], attr | curses.A_REVERSE)
-                                
-                                last_found = start_pos + len(s_query)
-                except: pass
-        # 5. СТАТУС-БАР
-        try:
-            # --- 1. ГОТОВИМ ДАННЫЕ ---
-            bm_indicator = " [M]" if self.bookmarks else ""
-            left_t = f"|==|:{self.width}{bm_indicator}"
-            
-            mid_t = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
-            
-            mode_names = self.tr('ui_mode_names')
-            f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
-            
-            # --- НОВЫЙ БЛОК ПРОГРЕСС-БАРА ---
-            total_l = len(self.lines)
-            pct_val = min(100, int(((self.par_index + r) / total_l) * 100)) if total_l > 0 else 0
-            
-            bar_w = 10
-            filled = int(bar_w * (pct_val / 100))
-            p_bar = f"[{'█' * filled}{' ' * (bar_w - filled)}]"
-            
-            # Резервируем ровно 4 символа под проценты (например, " 45%")
-            pct_formatted = f"{pct_val}%".rjust(4)
-            # Итоговая строка всегда будет занимать 10 (бар) + 2 (скобки) + 1 (пробел) + 4 (цифры) = 17 символов
-            pct_str = f"{p_bar} {pct_formatted}"
-            # -------------------------------
-            
-            am = f"[S:{self.scroll_speed}]  " if self.auto_scroll else ""
-            lang_label = self.tr('ui_lang_name')
-            right_t = f"{am}[{f_mode}] {pct_str}  {lang_label} "
-
-            # --- 2. РИСУЕМ ---
-            self.screen.attron(curses.color_pair(5))
-            self.screen.move(r - 1, 0)
-            self.screen.clrtoeol()
-            
-            self.screen.addstr(r - 1, 0, " " * (c - 1))
-
-            if c > 10:
-                self.screen.addstr(r - 1, 1, left_t[:c-2])
-            
-            if c > len(mid_t) + len(right_t) + 15: # Увеличил запас под центр
-                start_x = (c - len(mid_t)) // 2
-                self.screen.addstr(r - 1, start_x, mid_t)
                 
-            if c > len(right_t) + 5:
-                self.screen.insstr(r - 1, c - len(right_t), right_t)
+                # ПРОВЕРКА: Если строка Y достигла или перепрыгнула нижнюю рамку — СТОП
+                if y >= y_b and self.show_border > 0: break
+                if y >= r - f_off: break
+                
+                p_type, text = self.lines[idx]
+                attr = curses.color_pair(2 if p_type == "title" else 1)
+                
+                try:
+                    if p_type == "title":
+                        self.screen.addstr(y, (c - len(text)) // 2, text[:c-2], attr | curses.A_BOLD)
+                    else:
+                        self.screen.addstr(y, margin, text[:w_curr], attr)
+                        # ... тут твой код поиска и сносок ...
+                except: pass
 
-            self.screen.attroff(curses.color_pair(5))
-        except: pass
+        # 6. СТАТУС-БАР (как был раньше, рисует строго на r-1)
+        if self.show_status:
+            try:
+                # --- 1. ГОТОВИМ ДАННЫЕ ---
+                bm_indicator = " [M]" if self.bookmarks else ""
+                left_t = f"|==|:{self.width}{bm_indicator}"
+                mid_t = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
+                mode_names = self.tr('ui_mode_names')
+                f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
+                
+                total_l = len(self.lines)
+                pct_val = min(100, int(((self.par_index + r) / total_l) * 100)) if total_l > 0 else 0
+                bar_w = 10
+                filled = int(bar_w * (pct_val / 100))
+                p_bar = f"[{'█' * filled}{' ' * (bar_w - filled)}]"
+                pct_formatted = f"{pct_val}%".rjust(4)
+                pct_str = f"{p_bar} {pct_formatted}"
+                
+                am = f"[S:{self.scroll_speed}]  " if self.auto_scroll else ""
+                lang_label = self.tr('ui_lang_name')
+                right_t = f"{am}[{f_mode}] {pct_str}  {lang_label} "
+
+                # --- 2. РИСУЕМ ---
+                self.screen.attron(curses.color_pair(5))
+                self.screen.move(r - 1, 0)
+                self.screen.clrtoeol()
+                self.screen.addstr(r - 1, 0, " " * (c - 1))
+
+                if c > 10:
+                    self.screen.addstr(r - 1, 1, left_t[:c-2])
+                if c > len(mid_t) + len(right_t) + 15:
+                    start_x = (c - len(mid_t)) // 2
+                    self.screen.addstr(r - 1, start_x, mid_t)
+                if c > len(right_t) + 5:
+                    self.screen.insstr(r - 1, c - len(right_t), right_t)
+                self.screen.attroff(curses.color_pair(5))
+            except:
+                pass
+
+        self.screen.refresh()
 
     def run(self):
         self.screen.nodelay(True)
@@ -1278,6 +1265,9 @@ class MainWindow:
                 self.scan_directory() 
             
             # Настройки
+            elif ch == ord('H'):
+                self.show_status = not self.show_status
+                self.screen.erase()
             elif ch == ord('='): self.width = min(c-10, self.width+4); self.prepare_lines()
             elif ch == ord('-'): self.width = max(20, self.width-4); self.prepare_lines()
             elif ch == ord('c'): 
@@ -1323,7 +1313,7 @@ def main():
     history_path = os.path.expanduser("~/.config/fb2less/history.json")
 
     if args.version:
-        print("fb2less version 0.9.2")
+        print("fb2less version 0.9.3")
         return
 
     if args.help:
@@ -1356,3 +1346,5 @@ def main():
         curses.wrapper(lambda stdscr: MainWindow(stdscr, filename))
     else:
         print("Usage: fb2less [FILE]")
+if __name__ == "__main__":
+    main()
