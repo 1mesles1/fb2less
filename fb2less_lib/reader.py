@@ -1083,7 +1083,6 @@ class MainWindow:
             if idx < len(self.lines):
                 y = i + top_offset
                 
-                # ПРОВЕРКА: Если строка Y достигла или перепрыгнула нижнюю рамку — СТОП
                 if y >= y_b and self.show_border > 0: break
                 if y >= r - f_off: break
                 
@@ -1094,8 +1093,16 @@ class MainWindow:
                     if p_type == "title":
                         self.screen.addstr(y, (c - len(text)) // 2, text[:c-2], attr | curses.A_BOLD)
                     else:
+                        # Сначала рисуем основной текст строки
                         self.screen.addstr(y, margin, text[:w_curr], attr)
-                        # ... тут твой код поиска и сносок ...
+                        
+                        # ПОДСВЕТКА СНОСОК [1]
+                        notes_in_line = re.finditer(r'\[(.*?)\]', text[:w_curr])
+                        for match in notes_in_line:
+                            note_label = match.group(0) # Текст вида "[1]"
+                            start_x = match.start()
+                            # Рисуем поверх текста тем же цветом, что и заголовки
+                            self.screen.addstr(y, margin + start_x, note_label, curses.color_pair(2) | curses.A_BOLD)
                 except: pass
 
         # 6. СТАТУС-БАР (как был раньше, рисует строго на r-1)

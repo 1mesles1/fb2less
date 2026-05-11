@@ -71,6 +71,14 @@ def prepare_layout(paragraphs, width, meta_author="", notes=None, notes_label="-
             # 1. Убираем лишние пробелы, чтобы textwrap работал чисто
             t_content = text.strip()
             
+            # --- ЦЕНТРОВКА ЗВЁЗД ---
+            if re.fullmatch(r'(\s*\*\s*){3,}', t_content):
+                padding = (width - len(t_content)) // 2
+                new_lines.append(("body", " " * max(0, padding) + t_content))
+                new_lines.append(("body", ""))
+                continue
+            # ----------------------
+
             # 2. Нарезаем текст (оставляем место под 2 пробела)
             wrapped = textwrap.wrap(t_content, width=width-2)
             
