@@ -4,9 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fb2less"
-version = "0.9.4"
+version = "0.9.5"
 description = "Advanced console reader"
-dependencies = []
+dependencies = [lxml]
 requires-python = ">=3.10"
 
 [project.scripts]

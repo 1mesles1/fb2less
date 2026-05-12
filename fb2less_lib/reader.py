@@ -1,30 +1,24 @@
 import curses, os, json, time, re, textwrap
-from .fb2_parser import fb2parse, get_fast_title
+from .fb2_parser import fb2parse
 from .layout import prepare_layout
 from .txt_parser import txt_parse
 from .epub_parser import epub_parse
+from .storage import Storage
+from . import dialogs
 
 class MainWindow:
     def __init__(self, stdscr, filename):
         self.screen = stdscr
-        self.filename = os.path.abspath(filename)
-        self.show_status = True
+        # Используем новый класс для работы с данными
+        self.storage = Storage(filename)
+        self.filename = self.storage.filename
         
-        # 1. НАСТРОЙКА ПУТЕЙ (~/.config/fb2less)
-        self.config_dir = os.path.expanduser("~/.config/fb2less")
-        os.makedirs(self.config_dir, exist_ok=True)
-        
-        self.history_file = os.path.join(self.config_dir, "history.json")
-        self.config_file = os.path.join(self.config_dir, "config.json")
-
-        self.history_data = self.load_full_history_file()
+        # 1. ЗАГРУЗКА ДАННЫХ
+        conf = self.storage.load_config()
+        self.history_data = self.storage.load_full_history()
         hist = self.history_data.get(self.filename, {})
 
-        self.auto_scroll = False
-        self.last_auto_time = time.time()
-        
-        # 2. ЗАГРУЗКА ГЛОБАЛЬНОГО КОНФИГА (Цвета, Язык, Интерфейс)
-        conf = self.load_config()
+        # 2. НАСТРОЙКИ ИНТЕРФЕЙСА (из конфига)
         self.fg = conf.get("fg", 7)
         self.bg = conf.get("bg", 0)
         self.head_color = conf.get("hc", 6)
@@ -34,69 +28,35 @@ class MainWindow:
         self.flip_mode = conf.get("flip", 0)
         self.lang_code = conf.get("lang", "en")
         self.show_status = conf.get("status", 1)
+        self.scan_path = conf.get("scan_path", os.getcwd())
         
-        # 3. ЗАГРУЗКА ИСТОРИИ КНИГИ (Прогресс и закладки)
-        hist = self.load_history()
+        self.auto_scroll = False
+        self.last_auto_time = time.time()
+        
+        # 3. ПРОГРЕСС КНИГИ
         self.par_index = hist.get("pos", 0)
         self.bookmarks = hist.get("bookmarks", [])
-        if not isinstance(self.bookmarks, list):
-            self.bookmarks = []
+        if not isinstance(self.bookmarks, list): self.bookmarks = []
             
-        # 4. ПОИСК ДОСТУПНЫХ ЛОКАЛЕЙ
+        # 4. ЛОКАЛИЗАЦИЯ
         locales_dir = os.path.join(os.path.dirname(__file__), 'locales')
         try:
             self.available_langs = sorted([f[:-5] for f in os.listdir(locales_dir) if f.endswith('.json')])
         except:
             self.available_langs = ['en', 'ru']
 
-        # Проверка валидности языка
         if self.lang_code not in self.available_langs:
             self.lang_code = self.available_langs[0] if self.available_langs else 'en'
-            
         self.load_lang(self.lang_code)
         
-        # 5. ЗАГРУЗКА КОНТЕНТА КНИГИ (уже с учетом перевода)
-        ext = filename.lower()
-        if ext.endswith('.txt'):
-            self.content = txt_parse(filename, unknown_author=self.tr('meta_unknown'))
-        elif ext.endswith('.epub'):
-            self.content = epub_parse(
-                filename, 
-                unknown_author=self.tr('meta_unknown'),
-                error_label=self.tr('meta_error')
-            )
-        elif ext.endswith(('.fb2', '.zip')):
-            self.content = fb2parse(
-                filename, 
-                unknown_title=self.tr('meta_unknown_title'), 
-                unknown_author=self.tr('meta_unknown')
-            )
-        else:
-            self.content = type('Empty', (), {
-                'paragraphs': [], 
-                'notes': {}, 
-                'meta': {
-                    'title': self.tr('meta_error'), 
-                    'author': self.tr('meta_unknown'), 
-                    'series': '', 
-                    'annotation': ''
-                },
-                'encoding': '???'
-            })
+        # 5. ЗАГРУЗКА КОНТЕНТА
+        self.reload_content()
 
-        if not self.content.paragraphs:
-            self.content.paragraphs = [('body', self.tr('err_empty_file'))]
-
-        self.notes = getattr(self.content, 'notes', {})
-        self.lines = []
-        
         self.search_query = ""
         curses.start_color()
         curses.use_default_colors()
         self.update_colors()
         self.prepare_lines()
-        self.last_note_idx = -1
-        self.last_note_pos = -1
         self.run()
 
     def update_colors(self): 
@@ -105,964 +65,161 @@ class MainWindow:
         curses.init_pair(3, self.bg, self.bg)
         curses.init_pair(4, -1, -1)
         curses.init_pair(5, self.bg, self.fg)
-    
-    def load_config(self):
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, "r", encoding='utf-8') as f:
-                    return json.load(f)
-        except: pass
-        return {}
-
-    def load_full_history_file(self):
-        try:
-            if os.path.exists(self.history_file):
-                with open(self.history_file, "r", encoding='utf-8') as f:
-                    return json.load(f)
-        except: pass
-        return {}
-
-    def load_history(self):
-        try:
-            if os.path.exists(self.history_file):
-                with open(self.history_file, "r", encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get(self.filename, {})
-        except: pass
-        return {}
-
-    def save_history(self):
-        try:
-            # 1. Сохраняем глобальный конфиг
-            config_data = {
-                "fg": self.fg, "bg": self.bg, "hc": self.head_color,
-                "width": self.width, "speed": self.scroll_speed,
-                "border": self.show_border, "flip": self.flip_mode,
-                "lang": self.lang_code,
-                "status": 1 if self.show_status else 0
-            }
-            with open(self.config_file, "w", encoding='utf-8') as f:
-                json.dump(config_data, f, ensure_ascii=False, indent=4)
-
-            # 2. Обновляем текущую книгу в нашем "складе"
-            # Добавляем 'author' и 'series', чтобы они не пропадали из библиотеки
-            self.history_data[self.filename] = {
-                "pos": self.par_index,
-                "bookmarks": self.bookmarks,
-                "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
-                "author": self.content.meta.get('author', self.tr('meta_unknown')),
-                "series": self.content.meta.get('series', ''),
-                "time": time.time()
-            }
-            
-            # 3. Записываем весь склад в файл
-            with open(self.history_file, "w", encoding='utf-8') as f:
-                json.dump(self.history_data, f, ensure_ascii=False, indent=4)
-        except: pass
 
     def load_lang(self, lang_code):
-        import json
         self.lang_code = lang_code
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base_path, 'locales', f'{lang_code}.json')
-        
+        path = os.path.join(os.path.dirname(__file__), 'locales', f'{lang_code}.json')
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 self.translations = json.load(f)
-        except Exception:
-            self.translations = {}
+        except: self.translations = {}
 
     def tr(self, key):
         return self.translations.get(key, key)
-    def jump_to_pct(self):
-        self.screen.nodelay(False)
-        r, c = self.screen.getmaxyx()
-        
-        # Используем ключ для текста приглашения
-        prompt = self.tr('ui_jump_to') # "Перейти на %: "
-        
-        self.screen.attron(curses.color_pair(5))
-        self.screen.move(r - 1, 0)
-        self.screen.clrtoeol()
-        # ДОБАВЛЕН - 1: чтобы не печатать в последнюю ячейку (r-1, c-1)
-        self.screen.addstr(r - 1, 0, prompt + " " * (c - len(prompt) - 1))
-        
-        curses.echo()
-        self.screen.attron(curses.color_pair(5))
-        try:
-            # Читаем ввод сразу после длины подсказки
-            raw = self.screen.getstr(r - 1, len(prompt))
-            val = int(raw.decode('utf-8'))
-            if 0 <= val <= 100:
-                self.par_index = int((len(self.lines) - 1) * (val / 100.0))
-        except: pass
-        
-        self.screen.attroff(curses.color_pair(5))
-        curses.noecho()
-        self.screen.nodelay(True)
 
-    def do_search(self):
-        self.screen.nodelay(False)
-        r, c = self.screen.getmaxyx()
+    def save_history(self):
+        # 1. Принудительно обновляем путь перед сохранением
+        self.storage.filename = self.filename 
         
-        prompt = "/ "
+        config_data = {
+            "fg": self.fg, "bg": self.bg, "hc": self.head_color,
+            "width": self.width, "speed": self.scroll_speed,
+            "border": self.show_border, "flip": self.flip_mode,
+            "lang": self.lang_code, 
+            "status": 1 if self.show_status else 0,
+            "scan_path": getattr(self, 'scan_path', os.getcwd())
+        }
         
-        self.screen.attron(curses.color_pair(5))
-        self.screen.move(r - 1, 0)
-        self.screen.clrtoeol()
-        # ИЗМЕНЕНИЕ: печатаем на один символ меньше (c - len(prompt) - 1)
-        self.screen.addstr(r - 1, 0, prompt + " " * (c - len(prompt) - 1))
+        book_info = {
+            "pos": self.par_index,
+            "bookmarks": self.bookmarks,
+            "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
+            "author": self.content.meta.get('author', self.tr('meta_unknown')),
+            "series": self.content.meta.get('series', ''),
+            "time": time.time() # Это важно для автооткрытия последней книги
+        }
         
-        curses.echo()
-        curses.curs_set(1)
-        self.screen.attron(curses.color_pair(5))
-        try:
-            # Читаем ввод
-            raw = self.screen.getstr(r - 1, len(prompt))
-            res = raw.decode('utf-8', errors='replace').strip()
-            if res: 
-                self.search_query = res
-                self.find_next()
-        except: pass
-        
-        self.screen.attroff(curses.color_pair(5))
-        curses.noecho()
-        curses.curs_set(0)
-        self.screen.nodelay(True)
+        self.storage.save_all(config_data, self.history_data, book_info)
 
-    def find_next(self):
-        if not self.search_query: return
-        for i in range(self.par_index + 1, len(self.lines)):
-            p_type, text = self.lines[i]
-            if self.search_query.lower() in text.lower():
-                self.par_index = i
-                return
-
-    def find_prev(self):
-        if not self.search_query: return
-        for i in range(self.par_index - 1, -1, -1):
-            p_type, text = self.lines[i]
-            if self.search_query.lower() in text.lower():
-                self.par_index = i
-                return
-
-    def jump_chapter(self, direction):
-        step = 1 if direction > 0 else -1
-        idx = self.par_index + step
-        while 0 <= idx < len(self.lines):
-            p_type, text = self.lines[idx]
-            if p_type == "title":
-                self.par_index = idx
-                return
-            idx += step
-
-    def open_footnote(self):
-        r, c = self.screen.getmaxyx()
-        d_h = r - 3 if self.show_border == 2 else (r - 2 if self.show_border == 1 else r - 1)
-        
-        visible_notes = []
-        for i in range(d_h):
-            idx = self.par_index + i
-            if idx < len(self.lines):
-                line_data = self.lines[idx]
-                line_text = line_data[1] if isinstance(line_data, tuple) else line_data
-                m = re.findall(r'\[(.*?)\]', line_text)
-                for note_id in m:
-                    if note_id in self.content.notes or any(note_id in k for k in self.content.notes):
-                        if note_id not in visible_notes:
-                            visible_notes.append(note_id)
-
-        if not visible_notes:
-            return
-
-        if self.par_index == self.last_note_pos:
-            self.last_note_idx = (self.last_note_idx + 1) % len(visible_notes)
+    def reload_content(self):
+        ext = self.filename.lower()
+        if ext.endswith('.txt'):
+            self.content = txt_parse(self.filename, self.tr('meta_unknown'))
+        elif ext.endswith('.epub'):
+            self.content = epub_parse(self.filename, self.tr('meta_unknown'), self.tr('meta_error'))
         else:
-            self.last_note_idx = 0
-            self.last_note_pos = self.par_index
-
-        self.show_note(visible_notes[self.last_note_idx])
-
-    def show_note(self, note_label):
-        note_text = self.content.notes.get(note_label)
-        if not note_text:
-            digits = "".join(filter(str.isdigit, note_label))
-            if digits:
-                for k, v in self.content.notes.items():
-                    if "".join(filter(str.isdigit, k)) == digits:
-                        note_text = v; break
-        if not note_text: return
-
-        if len(note_text) > 1000:
-            note_text = note_text[:500] + "..."
-
-        r, c = self.screen.getmaxyx()
-        max_w = min(c - 6, 70)
-        wrapped = textwrap.wrap(note_text, width=max_w - 4)
-        h = min(r - 4, len(wrapped) + 2)
-        w = max_w
-        y, x = (r - h) // 2, (c - w) // 2
+            self.content = fb2parse(self.filename, self.tr('meta_unknown_title'), self.tr('meta_unknown'))
         
-        try:
-            nw = curses.newwin(h, w, y, x)
-            nw.keypad(True)
-            nw.bkgd(" ", curses.color_pair(1))
-            nw.box()
-            # Локализованный заголовок окна
-            header = f" {self.tr('ui_note_title')} "
-            nw.addstr(0, 2, header, curses.A_BOLD)
-            for i, line in enumerate(wrapped[:h-2]):
-                nw.addstr(i + 1, 2, line)
-            nw.refresh()
-            nw.getch()
-        except: pass
-        self.redraw_scr()
-
-    def show_help(self):
-        r, c = self.screen.getmaxyx()
-        # Загружаем список команд из локализации
-        h_commands = self.tr('help_commands')
-        
-        h_h = min(r - 2, 22)
-        h_w = min(c - 4, 60)
-        h_y, h_x = (r - h_h) // 2, (c - h_w) // 2
-        
-        try:
-            hw = curses.newwin(h_h, h_w, h_y, h_x)
-            hw.keypad(True)
-            hw.bkgd(" ", curses.color_pair(1))
-            
-            cur_top = 0
-            visible_rows = h_h - 6 
-            
-            while True:
-                hw.erase()
-                hw.box()
-                
-                # Заголовок и подсказка из перевода
-                header = f" {self.tr('help_header')} "
-                hint = f" {self.tr('help_scroll_hint')} "
-                
-                hw.addstr(1, (h_w - len(header)) // 2, header, curses.A_BOLD)
-                hw.addstr(2, 1, "-" * (h_w - 2))
-                
-                for i in range(visible_rows):
-                    idx = i + cur_top
-                    if idx < len(h_commands):
-                        hw.addstr(i + 3, 2, h_commands[idx][:h_w-4])
-                
-                hw.addstr(h_h - 3, 1, "-" * (h_w - 2))
-                hw.addstr(h_h - 2, (h_w - len(hint)) // 2, hint, curses.A_BOLD)
-                
-                hw.refresh()
-                ch = hw.getch()
-                
-                if ch in [ord('j'), curses.KEY_DOWN]:
-                    if cur_top + visible_rows < len(h_commands):
-                        cur_top += 1
-                elif ch in [ord('k'), curses.KEY_UP]:
-                    if cur_top > 0:
-                        cur_top -= 1
-                elif ch in [27, ord('q'), ord('h'), 10, 13]:
-                    break
-        except: pass
-        self.redraw_scr()
+        self.notes = getattr(self.content, 'notes', {})
+        if not self.content.paragraphs:
+            self.content.paragraphs = [('body', self.tr('err_empty_file'))]
 
     def prepare_lines(self):
         r, c = self.screen.getmaxyx()
         border_space = 2 if self.show_border > 0 else 0
         w = min(c - border_space - 4, self.width)
-        
         self.lines, self.toc = prepare_layout(
-            self.content.paragraphs, 
-            w, 
+            self.content.paragraphs, w, 
             self.content.meta.get('author', ''),
-            notes=self.notes,
-            # Передаем локализованный заголовок сносок
-            notes_label=self.tr('ui_notes_section') 
+            notes=self.notes, notes_label=self.tr('ui_notes_section')
         )
 
-    def show_toc(self):
+    def jump_chapter(self, direction):
         if not self.toc: return
-        r, c = self.screen.getmaxyx()
-
-        max_t_len = 0
-        for i, (title, l_idx) in enumerate(self.toc):
-            full_t = f"{i+1}. {title}"
-            if len(full_t) > max_t_len:
-                max_t_len = len(full_t)
-
-        w_win = max(35, min(c - 4, max_t_len + 4, 60)) 
-        h_win = min(r - 4, len(self.toc) + 2)
-        y, x = (r - h_win) // 2, (c - w_win) // 2
         
-        try:
-            tw = curses.newwin(h_win, w_win, y, x)
-            tw.keypad(True)
-            tw.bkgd(" ", curses.color_pair(1))
-            
-            cur = 0
-            for i, (title, l_idx) in enumerate(self.toc):
-                if l_idx <= self.par_index: cur = i
-
-            r_available = h_win - 2
-            off = max(0, cur - r_available // 2)
-            if off > len(self.toc) - r_available:
-                off = max(0, len(self.toc) - r_available)
-
-            while True:
-                tw.erase()
-                tw.box()
-                # Локализованный заголовок оглавления
-                header = f" {self.tr('ui_toc_title')} "
-                if w_win > len(header) + 2:
-                    tw.addstr(0, (w_win - len(header)) // 2, header, curses.A_BOLD)
-                
-                if cur < off:
-                    off = cur
-                elif cur >= off + r_available:
-                    off = cur - r_available + 1
-                if off > len(self.toc) - r_available:
-                    off = max(0, len(self.toc) - r_available)
-                
-                for i in range(r_available):
-                    idx = i + off
-                    if idx < len(self.toc):
-                        style = curses.A_REVERSE if idx == cur else curses.A_NORMAL
-                        chapter_name = self.toc[idx][0]
-                        max_text_w = w_win - 8
-                        if len(chapter_name) > max_text_w:
-                            chapter_name = chapter_name[:max_text_w-3] + "..."
-                        
-                        #line_txt = f"{idx+1:2}. {chapter_name}" #С нумерацией глав
-                        line_txt = f"  {chapter_name}" #Без нумерации глав
-                        tw.addstr(i + 1, 2, line_txt.ljust(w_win-5), style)
-                
-                tw.refresh()
-                key = tw.getch()
-
-                if key in [ord('j'), curses.KEY_DOWN]: 
-                    cur = min(len(self.toc)-1, cur + 1)
-                elif key in [ord('k'), curses.KEY_UP]: 
-                    cur = max(0, cur - 1)
-                elif key == curses.KEY_NPAGE: 
-                    cur = min(len(self.toc)-1, cur + r_available)
-                elif key == curses.KEY_PPAGE: 
-                    cur = max(0, cur - r_available)
-                elif key == curses.KEY_HOME: 
-                    cur = 0
-                elif key == curses.KEY_END: 
-                    cur = len(self.toc) - 1
-                elif key in [10, 13, curses.KEY_ENTER]:
-                    self.par_index = self.toc[cur][1]
-                    break
-                elif key in [ord('q'), ord('t'), 27]: 
-                    break
-        except: pass
-        self.redraw_scr()
-
-    def show_info(self):
-        r, c = self.screen.getmaxyx()
+        # Получаем только индексы строк из оглавления
+        chapter_indices = sorted([item[1] for item in self.toc])
         
-        # 1. Готовим текст
-        m = self.content.meta
-        # Используем локализованные метки
-        info_text = [
-            f" {self.tr('info_title')}: {m['title']}",
-            f" {self.tr('info_author')}: {m['author']}",
-        ]
-        if m['series']:
-            info_text.append(f" {self.tr('info_series')}: {m['series']}")
-            
-        info_text.append("-" * 40)
-        
-        # Техданные
-        f_size = os.path.getsize(self.filename) // 1024
-        # Определяем тип файла для вывода
-        ext = self.filename.lower()
-        if ext.endswith('.zip'): f_type = "ZIP/FB2"
-        elif ext.endswith('.epub'): f_type = "EPUB"
-        elif ext.endswith('.txt'): f_type = "TXT"
-        else: f_type = "FB2"
+        if direction > 0:
+            # Ищем первую главу, индекс которой больше текущего
+            for idx in chapter_indices:
+                if idx > self.par_index:
+                    self.par_index = idx
+                    return
+        else:
+            for idx in reversed(chapter_indices):
+                if idx < self.par_index - 1:
+                    self.par_index = idx
+                    return
+            self.par_index = 0
 
-        total_pages = (len(self.lines) // 50) + 1
-        
-        # Локализуем технические параметры
-        info_text.append(f" {self.tr('info_file')}:     {os.path.basename(self.filename)} ({f_type})")
-        info_text.append(f" {self.tr('info_size')}:   {f_size} KB")
-        info_text.append(f" {self.tr('info_volume')}:   {len(self.lines)} {self.tr('info_lines')} (~{total_pages} {self.tr('info_pages')})")
-        info_text.append("-" * 40)
-        
-        if m['annotation']:
-            info_text.append(f" {self.tr('info_annot')}:")
-            wrapped_ann = textwrap.wrap(m['annotation'], width=min(c - 10, 50))
-            info_text.extend(["   " + line for line in wrapped_ann[:15]])
-            if len(wrapped_ann) > 15: info_text.append("   ...")
-
-        # 2. Отрисовка окна
-        h_h, h_w = len(info_text) + 2, min(c - 4, 60)
-        h_y, h_x = (r - h_h) // 2, (c - w_win if 'w_win' in locals() else h_w) // 2 # поправил
-        y, x = (r - h_h) // 2, (c - h_w) // 2
-        
-        try:
-            iw = curses.newwin(h_h, h_w, max(0, y), max(0, x))
-            iw.keypad(True)
-            iw.bkgd(" ", curses.color_pair(1))
-            iw.box()
-            for i, line in enumerate(info_text):
-                if i < h_h - 2:
-                    iw.addstr(i + 1, 2, line[:h_w-4])
-            iw.refresh()
-            iw.getch()
-        except: pass
-        self.redraw_scr()
-
-    def scan_directory(self):
-        r, c = self.screen.getmaxyx()
-        # 1. Рисуем окошко "Сканирую"
-        sw = curses.newwin(3, 26, (r-3)//2, (c-26)//2)
-        sw.bkgd(" ", curses.color_pair(5))
-        sw.box()
-        # Локализуем "Сканирую..."
-        scan_msg = self.tr('msg_scanning')
-        sw.addstr(1, (26-len(scan_msg))//2, scan_msg)
-        sw.refresh()
-
-        start_dir = os.getcwd()
-        found_new = 0
-        
-        try:
-            with open(self.history_file, "r") as f: hist_data = json.load(f)
-        except: hist_data = {}
-
-        existing_titles = [info.get('title', '') for info in hist_data.values()]
-
-        for root_dir, dirs, files in os.walk(start_dir):
-            for file in files:
-                if file.lower().endswith(('.fb2', '.fb2.zip', '.zip', '.epub', '.txt')):
-                    full_path = os.path.abspath(os.path.join(root_dir, file))
-                    
-                    if full_path not in hist_data:
-                        # Определяем расширение для правильного парсинга метаданных
-                        ext = file.lower()
-                        author = self.tr('meta_unknown')
-                        series = ""
-                        title = file
-
-                        try:
-                            if ext.endswith(('.fb2', '.zip')):
-                                from .fb2_parser import fb2parse
-                                content = fb2parse(full_path)
-                                title = content.meta.get('title', file)
-                                author = content.meta.get('author', author)
-                                series = content.meta.get('series', '')
-                            elif ext.endswith('.epub'):
-                                from .epub_parser import epub_parse
-                                content = epub_parse(full_path)
-                                title = content.meta.get('title', file)
-                                author = content.meta.get('author', author)
-                                series = content.meta.get('series', '')
-                        except:
-                            pass
-                        
-                        if title in existing_titles:
-                            title = "*" + title
-                        
-                        hist_data[full_path] = {
-                            "pos": 0, "fg": self.fg, "bg": self.bg, 
-                            "hc": self.head_color, "width": self.width,
-                            "speed": self.scroll_speed, "flip": self.flip_mode,
-                            "border": self.show_border, 
-                            "title": str(title),
-                            "author": str(author),
-                            "series": str(series),
-                            "lang": self.lang_code,
-                            "time": time.time()
-                        }
-                        existing_titles.append(title)
-                        found_new += 1
-
-        deleted_count = 0
-        paths_in_history = list(hist_data.keys())
-        for path in paths_in_history:
-            # ПРОПУСКАЕМ НАСТРОЙКИ
-            if path == "settings": continue
-            
-            if not os.path.exists(path):
-                del hist_data[path]
-                deleted_count += 1
-
-        # СИНХРОНИЗИРУЕМ ПАМЯТЬ ПРОГРАММЫ
-        self.history_data = hist_data
-
-        if found_new > 0 or deleted_count > 0:
-            with open(self.history_file, "w", encoding='utf-8') as f:
-                # Добавь indent=4 для красоты
-                json.dump(hist_data, f, ensure_ascii=False, indent=4)
-        
-        sw.erase()
-        sw.box()
-        # Сообщаем об успехе
-        res_msg = f"{self.tr('scan_new')}: {found_new} / {self.tr('scan_del')}: {deleted_count}"
-        sw.addstr(1, max(1, (26-len(res_msg))//2), res_msg[:24])
-        sw.refresh()
-        time.sleep(1.5)
-        self.redraw_scr()
-
-    def show_settings(self):
-        r, c = self.screen.getmaxyx()
-        conf = self.load_config()
-        scan_path = conf.get("scan_path", os.getcwd())
-
-        # Пункты меню (Язык теперь первый)
-        cur = 0
-        w_win = min(c - 4, 60)
-        h_win = 8  # Уменьшили высоту окна (было 10)
-        y, x = (r - h_win) // 2, (c - w_win) // 2
-        
-        try:
-            sw = curses.newwin(h_win, w_win, y, x)
-            sw.keypad(True)
-            sw.bkgd(" ", curses.color_pair(1))
-            
-            while True:
-                sw.erase(); sw.box()
-                title = f" {self.tr('ui_settings')} "
-                sw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
-                
-                st_val = self.tr('ui_on') if self.show_status else self.tr('ui_off')
-                menu_items = [
-                    f"{self.tr('ui_language')}: {self.lang_code.upper()}",
-                    f"{self.tr('set_status')}: {st_val}", # Используем ключи из перевода
-                    f"{self.tr('set_path')}: {scan_path}",
-                    self.tr('set_scan'),
-                    self.tr('set_clear_lib'),
-                    self.tr('set_save')
-                ]
-
-                for i, item in enumerate(menu_items):
-                    style = curses.A_REVERSE if i == cur else curses.A_NORMAL
-                    d_text = item if len(item) < w_win-4 else item[:w_win-7] + "..."
-                    sw.addstr(i + 1, 2, d_text.ljust(w_win - 4), style) # Отрисовка с i+1
-
-                sw.refresh()
-                key = sw.getch()
-
-                if key in [ord('j'), curses.KEY_DOWN]:
-                    cur = (cur + 1) % len(menu_items)
-                elif key in [ord('k'), curses.KEY_UP]:
-                    cur = (cur - 1) % len(menu_items)
-                if key in [10, 13, curses.KEY_ENTER]:
-                    if cur == 0: # Смена языка
-                        idx = self.available_langs.index(self.lang_code)
-                        self.lang_code = self.available_langs[(idx + 1) % len(self.available_langs)]
-                        self.load_lang(self.lang_code)
-                        self.prepare_lines()
-                        self.redraw_scr() 
-                    
-                    elif cur == 1: # Переключатель статус-бара
-                        self.show_status = not self.show_status
-                        self.redraw_scr()
-
-                    elif cur == 2: # Путь
-                        curses.echo(); curses.curs_set(1)
-                        prompt = "> "
-                        sw.addstr(h_win-2, 2, prompt + " "*(w_win-5), curses.color_pair(5))
-                        try:
-                            raw = sw.getstr(h_win-2, 2 + len(prompt))
-                            input_p = raw.decode('utf-8').strip()
-                            if input_p:
-                                test_p = os.path.abspath(os.path.expanduser(input_p))
-                                if os.path.isdir(test_p): scan_path = test_p
-                                else:
-                                    sw.addstr(h_win-2, 2, self.tr('err_path_nf').ljust(w_win-4), curses.color_pair(2))
-                                    sw.refresh(); time.sleep(1)
-                        except: pass
-                        curses.noecho(); curses.curs_set(0)
-                    
-                    elif cur == 3: # Скан
-                        if os.path.isdir(scan_path):
-                            old_cwd = os.getcwd()
-                            try:
-                                os.chdir(scan_path); self.scan_directory()
-                            finally: os.chdir(old_cwd)
-                        break
-
-                    elif cur == 4: # Очистка
-                        self.history_data = {self.filename: self.history_data.get(self.filename, {})}
-                        with open(self.history_file, "w", encoding='utf-8') as f:
-                            json.dump(self.history_data, f, ensure_ascii=False, indent=4)
-                        break
-
-                    elif cur == 5: # Сохранить
-                        c_data = self.load_config()
-                        c_data.update({
-                            "scan_path": scan_path, 
-                            "lang": self.lang_code,
-                            "status": 1 if self.show_status else 0
-                        })
-                        with open(self.config_file, "w", encoding='utf-8') as f:
-                            json.dump(c_data, f, ensure_ascii=False, indent=4)
-                        break
-                elif key in [ord('q'), 27, ord('o'), 1097]:
-                    break
-        except: pass
-        self.redraw_scr()
-
-    def show_library(self):
-        hist_data = self.history_data
-        all_items = []
-        for path, info in hist_data.items():
-            if path == "settings": continue
-            all_items.append({
-                'path': path,
-                'title': info.get('title', os.path.basename(path)),
-                'author': info.get('author', self.tr('meta_unknown')),
-                'series': info.get('series', '')
-            })
-
-        sort_mode = 0 # 0-Название, 1-Автор, 2-Цикл
-        # Список ключей для перевода названий режимов
-        sort_labels = ['sort_title', 'sort_author', 'sort_series']
-        
-        filter_query = ""
-        cur = 0
-        target = os.path.abspath(self.filename)
-        for i, it in enumerate(all_items):
-            if os.path.abspath(it['path']) == target:
-                cur = i; break
-
-        r, c = self.screen.getmaxyx()
-        w_win = min(c - 4, 60)
-        h_win = min(r - 4, 30)
-        y, x = (r - h_win) // 2, (c - w_win) // 2
-        
-        try:
-            lw = curses.newwin(h_win, w_win, y, x)
-            lw.keypad(True)
-            lw.bkgd(" ", curses.color_pair(1))
-            
-            while True:
-                if filter_query:
-                    raw_items = [it for it in all_items if filter_query.lower() in it['path'].lower() or filter_query.lower() in it['title'].lower()]
-                else:
-                    raw_items = all_items
-
-                # Логика сортировки
-                if sort_mode == 1:
-                    items = sorted(raw_items, key=lambda x: (x['author'].lower(), x['title'].lower()))
-                elif sort_mode == 2:
-                    items = sorted(raw_items, key=lambda x: (x['series'] == '', x['series'].lower(), x['title'].lower()))
-                else:
-                    items = sorted(raw_items, key=lambda x: x['title'].lower())
-
-                # ВОЗВРАЩАЕМ ФОКУС: если мы только зашли или сменили сортировку
-                # ищем, где в новом списке находится наша открытая книга
-                if 'first_open' not in locals():
-                    target_path = os.path.abspath(self.filename)
-                    for i, it in enumerate(items):
-                        if os.path.abspath(it['path']) == target_path:
-                            cur = i
-                            break
-                    first_open = True # Чтобы фокус не прыгал при каждом движении
-
-                if cur >= len(items): cur = max(0, len(items) - 1)
-                
-                # Резервируем 5 строк под стабильный подвал (2 строки на инфо + разделители)
-                r_available = h_win - 6
-
-                lw.erase(); lw.box()
-                lib_h = f" {self.tr('ui_lib_title')} "
-                lw.addstr(0, (w_win - len(lib_h)) // 2, lib_h, curses.A_BOLD)
-
-                off = max(0, cur - r_available // 2)
-                if off > len(items) - r_available: off = max(0, len(items) - r_available)
-
-                for i in range(r_available):
-                    idx = i + off
-                    if idx < len(items):
-                        it = items[idx]
-                        style = curses.A_REVERSE if idx == cur else curses.A_NORMAL
-                        lw.move(i + 1, 1); lw.addstr(" " * (w_win - 2), style)
-                        try:
-                            max_t_w = w_win - 4
-                            if sort_mode == 1: d_name = f"{it['author']} - {it['title']}"
-                            elif sort_mode == 2 and it['series']: d_name = f"({it['series']}) {it['title']}"
-                            else: d_name = it['title']
-
-                            d_t = d_name if len(d_name) <= max_t_w else d_name[:max_t_w-3] + "..."
-                            t_attr = curses.color_pair(2) if idx != cur else style
-                            lw.addstr(i + 1, 2, d_t, t_attr | curses.A_BOLD)
-                        except: pass
-# --- ПОСТОЯННЫЙ ПОДВАЛ ---
-                lw.attron(curses.color_pair(1))
-                # Верхняя черта подвала (всегда на месте)
-                lw.hline(h_win - 5, 1, curses.ACS_HLINE, w_win - 2)
-                
-                # Строка 1: Поиск ИЛИ Режим сортировки (Центрировано)
-                lw.move(h_win - 4, 1); lw.addstr(" " * (w_win - 2))
-                if filter_query:
-                    p_text = f"{self.tr('lib_search')}{filter_query}"
-                    # Если это поиск — добавляем цвет заголовка и жирность
-                    attr = curses.color_pair(2) | curses.A_BOLD
-                else:
-                    p_text = f"{self.tr('lib_sort')}{self.tr(sort_labels[sort_mode])}"
-                    # Если это сортировка — цвет обычного текста
-                    attr = curses.color_pair(1)
-                
-                # Печать по центру с выбранным атрибутом
-                start_x = max(2, (w_win - len(p_text)) // 2)
-                lw.addstr(h_win - 4, start_x, p_text[:w_win-4], attr)
-                
-                # Строка 2: Путь к файлу
-                lw.hline(h_win - 3, 1, curses.ACS_HLINE, w_win - 2)
-                lw.move(h_win - 2, 1); lw.addstr(" " * (w_win - 2))
-                if items:
-                    path = items[cur]['path']
-                    display_path = path if len(path) < w_win - 6 else "..." + path[-(w_win-7):]
-                    lw.addstr(h_win - 2, 2, display_path)
-                lw.attroff(curses.color_pair(1))
-
-                lw.refresh()
-                key = lw.getch()
-
-                if key in [ord('.'), 1102]: key = ord('/')
-                if key == ord('/'):
-                    p_str = self.tr('lib_search')
-                    # При поиске оставляем подсветку color_pair(2), как ты просил
-                    lw.move(h_win - 4, 1); lw.addstr(" " * (w_win - 2))
-                    lw.addstr(h_win - 4, 2, p_str, curses.color_pair(2) | curses.A_BOLD)
-                    curses.echo(); curses.curs_set(1)
-                    try:
-                        raw = lw.getstr(h_win - 4, 2 + len(p_str), w_win - len(p_str) - 4)
-                        filter_query = raw.decode('utf-8').strip()
-                    except: pass
-                    curses.noecho(); curses.curs_set(0); cur = 0
-                elif key == 27: # ESC
-                    if filter_query: filter_query = ""; cur = 0
-                    else: break
-                elif key in [ord('s'), 1099]:
-                    sort_mode = (sort_mode + 1) % 3
-                    filter_query = ""
-                    if 'first_open' in locals(): del first_open # Сброс флага для поиска в новом режиме
-                    continue
-                elif key in [ord('j'), curses.KEY_DOWN]: cur = min(len(items)-1, cur + 1)
-                elif key in [ord('k'), curses.KEY_UP]: cur = max(0, cur - 1)
-                elif key == curses.KEY_NPAGE: cur = min(len(items)-1, cur + r_available)
-                elif key == curses.KEY_PPAGE: cur = max(0, cur - r_available)
-                elif key in [ord('d'), curses.KEY_DC] and items:
-                    p_to_del = items[cur]['path']
-                    if p_to_del in hist_data:
-                        del hist_data[p_to_del]
-                        self.history_data = hist_data
-                        with open(self.history_file, "w", encoding='utf-8') as f:
-                            json.dump(hist_data, f, ensure_ascii=False, indent=4)
-                        all_items = [it for it in all_items if it['path'] != p_to_del]
-                elif key in [10, 13, curses.KEY_ENTER] and items:
-                    new_p = items[cur]['path']
-                    self.save_history() 
-                    self.filename = os.path.abspath(new_p)
-                    
-                    # 1. Загружаем историю новой книги
-                    h = hist_data.get(self.filename, {})
-                    self.par_index = h.get("pos", 0)
-                    self.bookmarks = h.get("bookmarks", [])
-                    if not isinstance(self.bookmarks, list): self.bookmarks = []
-
-                    # 2. ПЕРЕЗАГРУЗКА КОНТЕНТА (Важно!)
-                    ext = self.filename.lower()
-                    if ext.endswith('.txt'):
-                        self.content = txt_parse(self.filename, unknown_author=self.tr('meta_unknown'))
-                    elif ext.endswith('.epub'):
-                        self.content = epub_parse(self.filename, unknown_author=self.tr('meta_unknown'), error_label=self.tr('meta_error'))
-                    elif ext.endswith(('.fb2', '.zip')):
-                        self.content = fb2parse(self.filename, unknown_title=self.tr('meta_unknown_title'), unknown_author=self.tr('meta_unknown'))
-                    
-                    self.notes = getattr(self.content, 'notes', {})
-                    
-                    # 3. Пересчитываем макет под новое окно и контент
-                    self.prepare_lines() 
-                    break  
-                elif key in [ord('q'), ord('L')]: break
-        except: pass
-        self.redraw_scr()
-
-    def show_bookmarks(self):
-        if not self.bookmarks: return
-        
-        cur = 0
-        r, c = self.screen.getmaxyx()
-        w_win = min(c - 4, 50)
-        h_win = min(r - 4, 15)
-        y, x = (r - h_win) // 2, (c - w_win) // 2
-        
-        try:
-            bw = curses.newwin(h_win, w_win, y, x)
-            bw.keypad(True)
-            bw.bkgd(" ", curses.color_pair(1))
-            
-            while True:
-                bw.erase(); bw.box()
-                title = f" {self.tr('ui_bookmarks')} "
-                bw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
-                
-                for i, bm in enumerate(self.bookmarks[:h_win-2]):
-                    style = curses.A_REVERSE if i == cur else curses.A_NORMAL
-                    pct = int((bm['pos'] / len(self.lines)) * 100) if self.lines else 0
-                    txt = f"{pct}%: {bm['text']}"[:w_win-4]
-                    bw.addstr(i + 1, 2, txt.ljust(w_win-4), style)
-
-                bw.refresh()
-                key = bw.getch()
-
-                if key in [ord('j'), curses.KEY_DOWN]: cur = min(len(self.bookmarks)-1, cur + 1)
-                elif key in [ord('k'), curses.KEY_UP]: cur = max(0, cur - 1)
-                elif key in [ord('x'), curses.KEY_DC]: # Удаление
-                    self.bookmarks.pop(cur)
-                    if not self.bookmarks: break
-                    cur = max(0, cur - 1)
-                elif key in [10, 13, curses.KEY_ENTER]: # Переход
-                    self.par_index = self.bookmarks[cur]['pos']
-                    break
-                elif key in [ord('q'), 27, ord('M')]: break
-        except: pass
-        self.redraw_scr()
-
+    def find_next(self):
+        if not self.search_query: return
+        for i in range(self.par_index + 1, len(self.lines)):
+            if self.search_query.lower() in self.lines[i][1].lower():
+                self.par_index = i; return
 
     def animate_flip(self, direction):
         r, c = self.screen.getmaxyx()
-        if self.show_border == 0:
-            x_l, x_r, y_top, y_bot = 0, c, 0, r - 1
-        else:
-            avail_c = c - 4 if self.show_border == 2 else c - 2
-            w_curr = min(avail_c - 4, self.width)
-            margin = (c - w_curr) // 2
-            x_l = (0 if self.show_border == 1 else margin - 2) + 1
-            x_r = (c - 1 if self.show_border == 1 else margin + w_curr + 1)
-            y_top, y_bot = 1, r - 2
-            
-        width = x_r - x_l
-        step = max(1, width // 20) 
-
-        # --- ФАЗА 1: УХОД ---
-        # Медленный уход для 1, 3, 4
-        if self.flip_mode in [1, 3, 4]:
-            if direction > 0:
-                for x in range(x_r - 1, x_l - step, -step):
-                    for curr_x in range(x, min(x + step, x_r)):
-                        if x_l <= curr_x < x_r:
-                            self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
-            else:
-                for x in range(x_l, x_r + step, step):
-                    for curr_x in range(max(x_l, x - step), x):
-                        if x_l <= curr_x < x_r:
-                            self.screen.vline(y_top, curr_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
+        d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
         
-        # Мгновенный уход для 2 (Твой новый метод)
+        # Границы листа для анимации
+        avail_c = c - (4 if self.show_border == 2 else 2)
+        w_curr = min(avail_c - 4, self.width)
+        margin = (c - w_curr) // 2
+        x_l = (0 if self.show_border == 1 else margin - 2) + 1
+        x_r = (c - 1 if self.show_border == 1 else margin + w_curr + 1)
+        y_t, y_b = 1, r - 2
+        
+        width = x_r - x_l
+        step = max(1, width // 20)
+
+        # ФАЗА 1: Уход (для режимов 1, 3, 4 медленно, для 2 - мгновенно)
+        if self.flip_mode in [1, 3, 4]:
+            rng = range(x_r-1, x_l-step, -step) if direction > 0 else range(x_l, x_r+step, step)
+            for x in rng:
+                for cx in range(x, x+step if direction > 0 else x-step, 1 if direction > 0 else -1):
+                    if x_l <= cx < x_r: self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                self.screen.refresh(); time.sleep(0.01)
         elif self.flip_mode == 2:
-            for x in range(x_l, x_r):
-                self.screen.vline(y_top, x, ord(' ') | curses.color_pair(3), y_bot - y_top)
+            for x in range(x_l, x_r): self.screen.vline(y_t, x, ord(' ')|curses.color_pair(3), y_b-y_t)
             self.screen.refresh()
 
-        # Меняем страницу
-        d_h = r - 3 if self.show_border == 2 else (r - 2 if self.show_border == 1 else r - 1)
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
-        # --- ФАЗА 2: ПОЯВЛЕНИЕ ---
-        if self.flip_mode == 2:
-            # Твой НОВЫЙ метод (Инвертированный медленный приход)
-            if direction > 0:
-                for x in range(x_r - 1, x_l - step, -step):
-                    self.redraw_scr()
-                    for cover_x in range(x_l, x):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.02)
-            else:
-                for x in range(x_l, x_r + step, step):
-                    self.redraw_scr()
-                    for cover_x in range(x, x_r):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.02)
-
-        elif self.flip_mode == 3:
-            # Твой старый B:2 (Обычный медленный приход)
-            if direction > 0:
-                for x in range(x_r - 1, x_l - step, -step):
-                    self.redraw_scr()
-                    for cover_x in range(x_l, x):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
-            else:
-                for x in range(x_l, x_r + step, step):
-                    self.redraw_scr()
-                    for cover_x in range(x, x_r):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
-
-        elif self.flip_mode == 4:
-            # Твой старый B:3 (Встречный)
-            if direction > 0:
-                for x in range(x_l, x_r + step, step):
-                    self.redraw_scr()
-                    for cover_x in range(x, x_r):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
-            else:
-                for x in range(x_r - 1, x_l - step, -step):
-                    self.redraw_scr()
-                    for cover_x in range(x_l, x):
-                        self.screen.vline(y_top, cover_x, ord(' ') | curses.color_pair(3), y_bot - y_top)
-                    self.screen.refresh()
-                    time.sleep(0.01)
-        else: 
-            self.redraw_scr()
+        # ФАЗА 2: Появление
+        if self.flip_mode in [2, 3, 4]:
+            for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2,3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
+                self.redraw_scr()
+                cov_rng = range(x_l, x) if (self.flip_mode in [2,3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
+                for cx in cov_rng: self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                self.screen.refresh(); time.sleep(0.01 if self.flip_mode != 2 else 0.02)
+        else: self.redraw_scr()
 
     def redraw_scr(self):
         r, c = self.screen.getmaxyx()
-        
-        # 1. Единый расчет отступов
         f_off = 1 if self.show_status else 0
         
+        # 1. Расчет высоты
         if self.show_border == 2:
-            top_offset, display_h = 1, r - 2 - f_off
-            y_b = r - 1 - f_off  # Нижняя рамка
+            t_off, d_h, y_b = 1, r - 2 - f_off, r - 1 - f_off
         elif self.show_border == 1:
-            top_offset, display_h = 1, r - 1 - f_off
-            y_b = r - 1 - f_off
+            t_off, d_h, y_b = 1, r - 1 - f_off, r - 1 - f_off
         else:
-            top_offset, display_h = 0, r - f_off
-            y_b = r - f_off
+            t_off, d_h, y_b = 0, r - f_off, r - f_off
 
-        # Расчет ширины
-        avail_c = c - 4 if self.show_border == 2 else (c - 2 if self.show_border == 1 else c)
+        # 2. Расчет ширины листа и границ заливки
+        avail_c = c - (4 if self.show_border == 2 else (2 if self.show_border == 1 else 0))
         w_curr = min(avail_c - 4, self.width)
         margin = (c - w_curr) // 2
+        
+        # Если рамок нет (0) или рамка по окну (1) — заливаем весь экран
+        if self.show_border in [0, 1]:
+            x_l, x_r = 0, c - 1
+        else:
+            x_l, x_r = margin - 2, margin + w_curr + 1
 
-        # 2. ОЧИСТКА ЭКРАНА
-        # Сначала заливаем ВЕСЬ экран цветом фона (чтобы за рамками не было мусора)
-        self.screen.bkgd(" ", curses.color_pair(4)) 
+        # 3. Очистка подложки
+        self.screen.bkgd(" ", curses.color_pair(4))
         self.screen.erase()
 
-        # 3. ФОН «ЛИСТА» (только внутри рамок)
-        x_l = 0 if self.show_border == 1 else margin - 2
-        x_r = c - 1 if self.show_border == 1 else margin + w_curr + 1
-        
-        # Рисуем фон строго до нижней рамки y_b
-        for y in range(0, y_b + 1):
+        # 4. Заливка цветом листа
+        for y in range(0, y_b + (1 if self.show_border == 0 else 0)):
             try:
                 self.screen.addstr(y, x_l, " " * (x_r - x_l + 1), curses.color_pair(1))
             except: pass
 
-        # 4. ОТРИСОВКА РАМОК
+        # 5. Отрисовка рамок
         if self.show_border > 0:
             self.screen.attron(curses.color_pair(1))
             self.screen.hline(0, x_l + 1, curses.ACS_HLINE, x_r - x_l - 1)
@@ -1077,239 +234,326 @@ class MainWindow:
             except: pass
             self.screen.attroff(curses.color_pair(1))
 
-        # 5. ОТРИСОВКА ТЕКСТА
-        for i in range(display_h):
+        # 6. Отрисовка текста
+        for i in range(d_h):
             idx = self.par_index + i
             if idx < len(self.lines):
-                y = i + top_offset
-                
-                if y >= y_b and self.show_border > 0: break
-                if y >= r - f_off: break
+                y_pos = i + t_off
+                if y_pos >= y_b and self.show_border > 0: break
                 
                 p_type, text = self.lines[idx]
                 attr = curses.color_pair(2 if p_type == "title" else 1)
                 
                 try:
                     if p_type == "title":
-                        self.screen.addstr(y, (c - len(text)) // 2, text[:c-2], attr | curses.A_BOLD)
+                        self.screen.addstr(y_pos, (c - len(text)) // 2, text[:c-2], attr | curses.A_BOLD)
                     else:
-                        # Сначала рисуем основной текст строки
-                        self.screen.addstr(y, margin, text[:w_curr], attr)
+                        # 1. Рисуем основной текст строки
+                        self.screen.addstr(y_pos, margin, text[:w_curr], attr)
                         
-                        # ПОДСВЕТКА СНОСОК [1]
-                        notes_in_line = re.finditer(r'\[(.*?)\]', text[:w_curr])
-                        for match in notes_in_line:
-                            note_label = match.group(0) # Текст вида "[1]"
-                            start_x = match.start()
-                            # Рисуем поверх текста тем же цветом, что и заголовки
-                            self.screen.addstr(y, margin + start_x, note_label, curses.color_pair(2) | curses.A_BOLD)
+                        # 2. ПОДСВЕТКА СНОСОК
+                        for m in re.finditer(r'\[(.*?)\]', text[:w_curr]):
+                            self.screen.addstr(y_pos, margin + m.start(), m.group(0), curses.color_pair(2) | curses.A_BOLD)
+                            
+                        # 3. ПОДСВЕТКА ПОИСКА
+                        if self.search_query:
+                            # Ищем все вхождения поискового запроса (без учета регистра)
+                            for m in re.finditer(re.escape(self.search_query), text[:w_curr], re.IGNORECASE):
+                                start_x = m.start()
+                                word = text[start_x : start_x + len(self.search_query)]
+                                # Красим в инвертированный цвет заголовка (или любой другой заметный)
+                                self.screen.addstr(y_pos, margin + start_x, word, curses.color_pair(2) | curses.A_REVERSE)
                 except: pass
+        
+        # 7. Рисуем статус-бар (если включен)
+        self.draw_status(r, c)
 
-        # 6. СТАТУС-БАР (как был раньше, рисует строго на r-1)
-        if self.show_status:
-            try:
-                # --- 1. ГОТОВИМ ДАННЫЕ ---
-                bm_indicator = " [M]" if self.bookmarks else ""
-                left_t = f"|==|:{self.width}{bm_indicator}"
-                mid_t = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
-                mode_names = self.tr('ui_mode_names')
-                f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
-                
-                total_l = len(self.lines)
-                pct_val = min(100, int(((self.par_index + r) / total_l) * 100)) if total_l > 0 else 0
-                bar_w = 10
-                filled = int(bar_w * (pct_val / 100))
-                p_bar = f"[{'█' * filled}{' ' * (bar_w - filled)}]"
-                pct_formatted = f"{pct_val}%".rjust(4)
-                pct_str = f"{p_bar} {pct_formatted}"
-                
-                am = f"[S:{self.scroll_speed}]  " if self.auto_scroll else ""
-                lang_label = self.tr('ui_lang_name')
-                right_t = f"{am}[{f_mode}] {pct_str}  {lang_label} "
+    def draw_status(self, r, c):
+        if not self.show_status: return
+        try:
+            # 1. Индикатор закладок
+            bm = " [M]" if self.bookmarks else ""
+            left = f"|==|:{self.width}{bm}"
+            
+            # 2. Индикатор автоскролла [S:x]
+            am_indicator = f"[S:{self.scroll_speed}] " if self.auto_scroll else ""
+            
+            mid = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
+            
+            # 3. ФИКСИРОВАННЫЕ ПРОЦЕНТЫ
+            # Используем rjust(4), чтобы под "100%" всегда было 4 символа (три цифры + %)
+            total = len(self.lines)
+            pct_val = min(100, int(((self.par_index + r) / total) * 100)) if total > 0 else 0
+            pct_str = f"{pct_val}%".rjust(4) 
+            
+            bar = f"[{'█'*(pct_val//10)}{' '*(10-(pct_val//10))}] {pct_str}"
+            
+            mode_names = self.tr('ui_mode_names')
+            f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
+            
+            # Собираем правую часть: [Скорость] [Режим] [Бар Проценты] Язык
+            right = f"{am_indicator}[{f_mode}] {bar}  {self.tr('ui_lang_name')} "
 
-                # --- 2. РИСУЕМ ---
-                self.screen.attron(curses.color_pair(5))
-                self.screen.move(r - 1, 0)
-                self.screen.clrtoeol()
-                self.screen.addstr(r - 1, 0, " " * (c - 1))
+            # РИСОВАНИЕ
+            self.screen.attron(curses.color_pair(5))
+            self.screen.move(r - 1, 0)
+            self.screen.clrtoeol()
+            self.screen.addstr(r - 1, 0, " " * (c - 1)) # Заливка всей строки
 
-                if c > 10:
-                    self.screen.addstr(r - 1, 1, left_t[:c-2])
-                if c > len(mid_t) + len(right_t) + 15:
-                    start_x = (c - len(mid_t)) // 2
-                    self.screen.addstr(r - 1, start_x, mid_t)
-                if c > len(right_t) + 5:
-                    self.screen.insstr(r - 1, c - len(right_t), right_t)
-                self.screen.attroff(curses.color_pair(5))
-            except:
-                pass
-
+            if c > 10:
+                self.screen.addstr(r - 1, 1, left[:c-2])
+            if c > len(mid) + len(right) + 20:
+                self.screen.addstr(r - 1, (c - len(mid)) // 2, mid)
+            if c > len(right) + 5:
+                # Печатаем правую часть с конца
+                self.screen.addstr(r - 1, c - len(right), right)
+            self.screen.attroff(curses.color_pair(5))
+        except: pass
         self.screen.refresh()
 
     def run(self):
         self.screen.nodelay(True)
         self.screen.keypad(True)
         curses.curs_set(0)
-        last_r, last_c = self.screen.getmaxyx()
+        last_size = None
+
         while True:
             r, c = self.screen.getmaxyx()
-            if (r, c) != (last_r, last_c):
+            size = self.screen.getmaxyx()
+            if size != last_size:
                 self.prepare_lines()
-                last_r, last_c = r, c
-            if self.auto_scroll:
-                if time.time() - self.last_auto_time >= 5 / self.scroll_speed:
-                    self.par_index = min(len(self.lines)-1, self.par_index + 1)
-                    self.last_auto_time = time.time()
+                last_size = size
+            
+            if self.auto_scroll and time.time() - self.last_auto_time >= 5 / self.scroll_speed:
+                self.par_index = min(len(self.lines)-1, self.par_index + 1)
+                self.last_auto_time = time.time()
+
             self.redraw_scr()
+            
             ch = self.screen.getch()
-            if ch == -1:
-                time.sleep(0.01); continue
-            if ch in [ord('.'), 1102]: ch = ord('/')
+            if ch == -1: 
+                time.sleep(0.01)
+                continue
 
-            elif ch == ord('K'): 
-                # Находим текущий язык в списке доступных
-                try:
-                    curr_idx = self.available_langs.index(self.lang_code)
-                except ValueError:
-                    curr_idx = 0
-                
-                # Берем следующий по кругу
-                next_idx = (curr_idx + 1) % len(self.available_langs)
-                self.lang_code = self.available_langs[next_idx]
-                
-                # Загружаем и применяем
-                self.load_lang(self.lang_code)
-                self.prepare_lines()
-                self.redraw_scr()
-                continue # Сразу уходим на новый круг, чтобы не сработали другие кнопки
-
-            # Остальное управление
-            elif ch == ord('q'): 
+            # 1. СИСТЕМНЫЕ (Выход, Настройки, Раскладка)
+            if ch in [ord('q'), 1081]: # q или й
+                if self.search_query:
+                    self.search_query = ""
+                    continue
                 self.save_history()
                 break
-            elif ch in [ord('o'), 1097]:
-                self.show_settings()
+
+            elif ch in [ord('o'), 1097]: # o или щ
+                dialogs.show_settings(self)
+                curses.flushinp()
+                while self.screen.getch() != -1: pass
+                continue 
+
+            if ch in [ord('.'), 1102, 44]: ch = ord('/')
+            if ch in [ord('['), 1093]: ch = ord('[')
+            if ch in [ord(']'), 1098]: ch = ord(']')
+
+            # 2. ДИАЛОГИ И ИНФО
+            if ch == ord('h'): dialogs.show_help(self)
+            elif ch == ord('i'): dialogs.show_info(self)
+            elif ch == ord('L'): 
+                dialogs.show_library(self)
+                continue
+            elif ch == ord('t'): dialogs.show_toc(self)
+            elif ch == ord('M'): dialogs.show_bookmarks(self)
+            elif ch == ord('Z'): self.storage.scan_directory(self)
+
+            # 3. ПОИСК, СНОСКИ, ЗАКЛАДКИ
             elif ch == ord('/'): self.do_search()
             elif ch == ord('n'): self.find_next()
             elif ch == ord('N'): self.find_prev()
-            elif ch == ord('h'): 
-                self.show_help()
-                continue
-            elif ch == ord('i'):
-                self.show_info()
-            elif ch == ord('L'):
-                self.show_library()
-            elif ch == ord('t'): 
-                self.show_toc()
-                continue
-            elif ch == ord('p'): 
-                self.jump_to_pct()
-                continue
-            elif ch == ord('e'):
-                self.flip_mode = (self.flip_mode + 1) % 5
-            
+            elif ch == ord('f'): self.open_footnote()
             elif ch == ord('m'):
-                # Берем текст из кортежа (тип, текст) -> line[1]
                 line_data = self.lines[self.par_index]
-                text_content = line_data[1] if isinstance(line_data, tuple) else str(line_data)
-                
-                curr_text = text_content[:30].strip() + "..." if text_content else "..."
-                self.bookmarks.append({"pos": self.par_index, "text": curr_text})
+                text = line_data[1] if isinstance(line_data, tuple) else str(line_data)
+                self.bookmarks.append({"pos": self.par_index, "text": text[:30].strip() + "..."})
                 self.save_history()
 
-            elif ch == ord('M'):
-                # Открыть список закладок
-                if self.bookmarks:
-                    self.show_bookmarks()
-            
-            elif ch == ord('f'):
-                self.open_footnote()
+            # 4. НАВИГАЦИЯ (Стрелки, j/k, Home/End)
+            elif ch in [ord('j'), curses.KEY_DOWN]: 
+                self.par_index = min(len(self.lines)-1, self.par_index + 1)
+            elif ch in [ord('k'), curses.KEY_UP]: 
+                self.par_index = max(0, self.par_index - 1)
+            elif ch == curses.KEY_HOME or ch == ord('g'): 
+                self.par_index = 0
+            elif ch == curses.KEY_END or ch == ord('G'):
+                r, c = self.screen.getmaxyx()
+                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                self.par_index = max(0, len(self.lines) - d_h)
+            elif ch == ord('['): self.jump_chapter(-1)
+            elif ch == ord(']'): self.jump_chapter(1)
 
-            # Управление автоскроллом
-            elif ch == ord('a'):
-                self.auto_scroll = not self.auto_scroll
-                self.last_auto_time = time.time()
-            elif ch == ord('s') and self.auto_scroll: self.scroll_speed = min(10, self.scroll_speed + 1)
-            elif ch == ord('S') and self.auto_scroll: self.scroll_speed = max(1, self.scroll_speed - 1)
-            
-            # Навигация
-            elif ch in [ord('j'), curses.KEY_DOWN]: self.par_index = min(len(self.lines)-1, self.par_index + 1)
-            elif ch in [ord('k'), curses.KEY_UP]: self.par_index = max(0, self.par_index - 1)
-
+            # 5. ПОСТРАНИЧНОЕ ЛИСТАНИЕ (с анимацией)
             elif ch in [ord(' '), curses.KEY_NPAGE, curses.KEY_RIGHT]: 
                 r, c = self.screen.getmaxyx()
-                d_h = r - 3 if self.show_border == 2 else (r - 2 if self.show_border == 1 else r - 1)
-
-                if self.flip_mode == 0: # 1 режим: МГНОВЕННО
+                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                if self.flip_mode == 0: 
                     self.par_index = min(len(self.lines)-1, self.par_index + d_h)
-                else: # 2 и 3 режимы: через функцию анимации
-                    if self.par_index < len(self.lines) - d_h:
-                        self.animate_flip(1)
+                elif self.par_index < len(self.lines) - d_h:
+                    self.animate_flip(1)
+            elif ch == ord('d'): # Пол-экрана вперед
+                self.par_index = min(len(self.lines)-1, self.par_index + (r-2)//2)
+            elif ch == ord('u'): # Пол-экрана назад
+                self.par_index = max(0, self.par_index - (r-2)//2)
 
             elif ch in [curses.KEY_PPAGE, curses.KEY_LEFT]: 
                 r, c = self.screen.getmaxyx()
-                d_h = r - 3 if self.show_border == 2 else (r - 2 if self.show_border == 1 else r - 1)
-
-                if self.flip_mode == 0: # 1 режим: МГНОВЕННО
+                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                if self.flip_mode == 0: 
                     self.par_index = max(0, self.par_index - d_h)
-                else: # 2 и 3 режимы
-                    if self.par_index > 0:
-                        self.animate_flip(-1)
+                elif self.par_index > 0:
+                    self.animate_flip(-1)
 
-            elif ch == curses.KEY_HOME or ch == ord('g'): self.par_index = 0
-            elif ch == curses.KEY_END or ch == ord('G'):
-                r, c = self.screen.getmaxyx()
-                # Вычисляем чистую высоту текстового поля (как в redraw_scr)
-                if self.show_border == 2:   d_h = r - 3
-                elif self.show_border == 1: d_h = r - 2
-                else:                       d_h = r - 1
-                self.par_index = max(0, len(self.lines) - d_h)
-            elif ch == ord('d'): self.par_index = min(len(self.lines)-1, self.par_index + (r-2)//2)
-            elif ch == ord('u'): self.par_index = max(0, self.par_index - (r-2)//2)
-            elif ch == ord('['): self.jump_chapter(-1)
-            elif ch == ord(']'): self.jump_chapter(1)  
-            elif ch == ord('Z'): # Заглавная Z
-                self.scan_directory() 
-            
-            # Настройки
-            elif ch == ord('H'):
-                self.show_status = not self.show_status
-                self.screen.erase()
+            # 6. ГОРЯЧИЕ КЛАВИШИ ВИДА И АВТОСКРОЛЛА
+            elif ch == ord('a'): 
+                self.auto_scroll = not self.auto_scroll
+                self.last_auto_time = time.time()
+                self.redraw_scr()
+            elif ch == ord('s') and self.auto_scroll: self.scroll_speed = min(10, self.scroll_speed + 1)
+            elif ch == ord('S') and self.auto_scroll: self.scroll_speed = max(1, self.scroll_speed - 1)
+            elif ch == ord('c'): self.fg = (self.fg + 1) % 8; self.update_colors()
+            elif ch == ord('b'): self.bg = (self.bg + 1) % 8; self.update_colors()
+            elif ch == ord('v'): self.head_color = (self.head_color + 1) % 8; self.update_colors()
+            elif ch == ord('B'): self.show_border = (self.show_border + 1) % 3; self.prepare_lines()
+            elif ch == ord('e'): self.flip_mode = (self.flip_mode + 1) % 5
             elif ch == ord('='): self.width = min(c-10, self.width+4); self.prepare_lines()
             elif ch == ord('-'): self.width = max(20, self.width-4); self.prepare_lines()
-            elif ch == ord('c'): 
-                self.fg = (self.fg + 1) % 8
-                if self.fg == self.bg: # Если совпало с фоном — прыгаем дальше
-                    self.fg = (self.fg + 1) % 8
-                self.update_colors()
 
-            elif ch == ord('B'):
-                # Переключаем 0 -> 1 -> 2 -> 0
-                self.show_border = (self.show_border + 1) % 3
+            # --- Смена языка (K) ---
+            elif ch == ord('K'):
+                idx = self.available_langs.index(self.lang_code)
+                self.lang_code = self.available_langs[(idx + 1) % len(self.available_langs)]
+                self.load_lang(self.lang_code)
                 self.prepare_lines()
-                
-            elif ch == ord('b'): 
-                self.bg = (self.bg + 1) % 8
-                # Если фон стал как текст или как заголовки — прыгаем дальше
-                while self.bg == self.fg or self.bg == self.head_color:
-                    self.bg = (self.bg + 1) % 8
-                self.update_colors()
-                
-            elif ch == ord('v'):
-                self.head_color = (self.head_color + 1) % 8
-                if self.head_color == self.bg: # Если заголовок совпал с фоном
-                    self.head_color = (self.head_color + 1) % 8
-                self.update_colors()
-            
-            if ch != -1 and ch not in [ord('n'), ord('N'), ord('/'), ord('f'), -1]:
+
+                # ИСПРАВЛЕНИЕ: Стираем 5 символов в самом углу перед отрисовкой
+                r, c = self.screen.getmaxyx()
+                try:
+                    # Затираем место, где написано 'En' или 'Ru'
+                    self.screen.addstr(r - 1, c - 6, "     ", curses.color_pair(5))
+                    self.screen.refresh() # Принудительно выводим "пустоту"
+                except: pass
+
+                self.redraw_scr()
+
+            # --- Скрыть/показать бар (H) ---
+            elif ch == ord('H'):
+                self.show_status = not self.show_status
+                self.prepare_lines()
+                self.screen.erase()
+                self.redraw_scr()
+
+            # --- Переход на процент (p) ---
+            elif ch == ord('P'):
+                self.jump_to_pct()
+
+            # Сброс поиска при любом другом действии
+            if ch != -1 and ch not in [ord('n'), ord('N'), ord('/'), ord('f')]:
+                # Если поиск активен и нажата 'q', мы просто гасим поиск, 
+                # но не выходим из программы сразу
+                if self.search_query and ch == ord('q'):
+                    self.search_query = ""
+                    continue # Пропускаем стандартную обработку 'q' (выход)
                 self.search_query = ""
 
-            # Выключение автоскролла при любой активности, кроме кнопок скорости
-            if self.auto_scroll and ch not in [ord('a'), ord('s'), ord('S'), -1]:
-                self.auto_scroll = False
+    def do_search(self):
+        self.screen.nodelay(False)
+        r, c = self.screen.getmaxyx()
+        prompt = "/ "
+        self.screen.attron(curses.color_pair(5))
+        self.screen.move(r - 1, 0)
+        self.screen.clrtoeol()
+        self.screen.addstr(r - 1, 0, (prompt + " " * (c - len(prompt) - 1))[:c-1])
+        
+        curses.echo(); curses.curs_set(1)
+        try:
+            raw = self.screen.getstr(r - 1, len(prompt))
+            res = raw.decode('utf-8', errors='replace').strip()
+            if res: 
+                self.search_query = res
+                self.find_next()
+        except: pass
+        curses.noecho(); curses.curs_set(0); self.screen.nodelay(True)
+
+    def find_prev(self):
+        if not self.search_query: return
+        for i in range(self.par_index - 1, -1, -1):
+            if self.search_query.lower() in self.lines[i][1].lower():
+                self.par_index = i; return
+
+    def jump_to_pct(self):
+        self.screen.nodelay(False)
+        r, c = self.screen.getmaxyx()
+        prompt = self.tr('ui_jump_to')
+        
+        self.screen.attron(curses.color_pair(5))
+        self.screen.move(r - 1, 0)
+        self.screen.clrtoeol()
+        self.screen.addstr(r - 1, 0, (prompt + " " * (c - len(prompt) - 1))[:c-1])
+        
+        curses.echo()
+        try:
+            raw = self.screen.getstr(r - 1, len(prompt))
+            val = int(raw.decode('utf-8'))
+            if 0 <= val <= 100:
+                # Пересчитываем индекс строки исходя из процента
+                self.par_index = int((len(self.lines) - 1) * (val / 100.0))
+        except: pass
+        
+        curses.noecho()
+        self.screen.nodelay(True)
+        self.redraw_scr()
+
+    def open_footnote(self):
+        r, c = self.screen.getmaxyx()
+        d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+        visible_notes = []
+        for i in range(d_h):
+            idx = self.par_index + i
+            if idx < len(self.lines):
+                line_text = self.lines[idx][1]
+                m = re.findall(r'\[(.*?)\]', line_text)
+                for note_id in m:
+                    if (note_id in self.notes or any(note_id in k for k in self.notes)) and note_id not in visible_notes:
+                        visible_notes.append(note_id)
+        if not visible_notes: return
+        
+        if not hasattr(self, 'last_note_idx'): self.last_note_idx = -1
+        self.last_note_idx = (self.last_note_idx + 1) % len(visible_notes)
+        self.show_note(visible_notes[self.last_note_idx])
+
+    def show_note(self, note_label):
+        note_text = self.notes.get(note_label)
+        if not note_text:
+            digits = "".join(filter(str.isdigit, note_label))
+            for k, v in self.notes.items():
+                if digits and "".join(filter(str.isdigit, k)) == digits:
+                    note_text = v; break
+        if not note_text: return
+
+        r, c = self.screen.getmaxyx()
+        max_w = min(c - 6, 70)
+        wrapped = textwrap.wrap(note_text, width=max_w - 4)
+        h = min(r - 4, len(wrapped) + 2)
+        y, x = (r - h) // 2, (c - max_w) // 2
+        
+        try:
+            nw = curses.newwin(h, max_w, y, x)
+            nw.bkgd(" ", curses.color_pair(1)); nw.box()
+            nw.addstr(0, 2, f" {self.tr('ui_note_title')} ", curses.A_BOLD)
+            for i, line in enumerate(wrapped[:h-2]):
+                nw.addstr(i + 1, 2, line)
+            nw.refresh(); nw.getch()
+        except: pass
+        self.redraw_scr()
+
 def main():
     import sys, curses, os, json, argparse
-    from fb2less_lib.reader import MainWindow
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('-h', '--help', action='store_true')
@@ -1317,41 +561,49 @@ def main():
     parser.add_argument('filename', nargs='?')
     args = parser.parse_args()
 
-    history_path = os.path.expanduser("~/.config/fb2less/history.json")
+    config_dir = os.path.expanduser("~/.config/fb2less")
+    history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.3")
+        print("fb2less version 0.9.5")
         return
 
     if args.help:
-        # Просто выводим английский текст напрямую
         print("Usage: fb2less [FILE]")
         print("\nControls:")
-        print("  h            - help")
-        print("  o            - Settings")
-        print("  L            - library")
-        print("  q            - exit")
+        print("  h            - Help screen")
+        print("  o            - Settings menu")
+        print("  L            - Library")
+        print("  Z            - Scan directory")
+        print("  q            - Exit")
         return
 
     filename = args.filename
-    # Если файл не указан, ищем последнюю открытую книгу в истории
+    
+    # Авто-поиск последней книги, если аргумент не передан
     if not filename and os.path.exists(history_path):
         try:
-            with open(history_path, "r") as f:
+            with open(history_path, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                # Убираем "settings" из поиска, чтобы max не упал
-                books = {k: v for k, v in data.items() if k != "settings"}
+                # Фильтруем только книги и берем путь самой свежей
+                books = {k: v for k, v in data.items() if isinstance(v, dict) and v.get('time')}
                 if books:
-                    filename = max(books.items(), key=lambda x: x[1].get('time', 0))[0]
-        except: pass
+                    # Находим ключ (путь) книги с максимальным временем
+                    filename = max(books.items(), key=lambda x: x[1]['time'])[0]
+        except Exception:
+            pass
 
     if filename:
-        if not os.path.exists(filename):
-            print(f"File not found: {filename}")
+        full_path = os.path.abspath(os.path.expanduser(filename))
+        if not os.path.exists(full_path):
+            print(f"Error: File not found - {full_path}")
             return
         
-        curses.wrapper(lambda stdscr: MainWindow(stdscr, filename))
+        # Запускаем MainWindow (он находится в этом же файле, импорт не нужен)
+        curses.wrapper(lambda stdscr: MainWindow(stdscr, full_path))
     else:
         print("Usage: fb2less [FILE]")
+        print("Hint: Open the library (L) or scan a folder (Z) to add books.")
+
 if __name__ == "__main__":
     main()
