@@ -54,6 +54,8 @@
     "set_path": "Verzeichnispfad",
     "set_scan": "Verzeichnis scannen",
     "set_clear_lib": "Bibliothek löschen",
+    "set_voice_speed": "Lesetempo (links/rechts)",
+    "ui_tts_language": "Vorlesesprache",
     "err_path_nf": "Pfad nicht gefunden!",
     "set_save": "Einstellungen speichern",
     "info_header": " ÜBER DAS BUCH ",

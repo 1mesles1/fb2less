@@ -1,10 +1,10 @@
-import curses, os, json, time, re, textwrap
+import curses, os, json, time, re, textwrap, threading
 from .fb2_parser import fb2parse
 from .layout import prepare_layout
 from .txt_parser import txt_parse
 from .epub_parser import epub_parse
 from .storage import Storage
-from . import dialogs
+from .import dialogs
 
 class MainWindow:
     def __init__(self, stdscr, filename):
@@ -12,6 +12,7 @@ class MainWindow:
         # Используем новый класс для работы с данными
         self.storage = Storage(filename)
         self.filename = self.storage.filename
+        self.voice_active = False
         
         # 1. ЗАГРУЗКА ДАННЫХ
         conf = self.storage.load_config()
@@ -29,9 +30,13 @@ class MainWindow:
         self.lang_code = conf.get("lang", "en")
         self.show_status = conf.get("status", 1)
         self.scan_path = conf.get("scan_path", os.getcwd())
+        self.tts_lang = conf.get("tts_lang", self.lang_code)
+        self.tts_proc = None
         
         self.auto_scroll = False
         self.last_auto_time = time.time()
+
+        self.voice_speed = conf.get("voice_speed", 100)
         
         # 3. ПРОГРЕСС КНИГИ
         self.par_index = hist.get("pos", 0)
@@ -87,6 +92,8 @@ class MainWindow:
             "border": self.show_border, "flip": self.flip_mode,
             "lang": self.lang_code, 
             "status": 1 if self.show_status else 0,
+            "voice_speed": getattr(self, 'voice_speed', 100),
+            "tts_lang": self.tts_lang,
             "scan_path": getattr(self, 'scan_path', os.getcwd())
         }
         
@@ -242,13 +249,21 @@ class MainWindow:
                 if y_pos >= y_b and self.show_border > 0: break
                 
                 p_type, text = self.lines[idx]
-                attr = curses.color_pair(2 if p_type == "title" else 1)
+
+                # ОПРЕДЕЛЯЕМ ЦВЕТ
+                is_reading = (getattr(self, 'voice_active', False) and idx == self.par_index)
+                
+                if is_reading:
+                    # Строка, которую читает робот, будет яркой и инвертированной
+                    attr = curses.color_pair(2) | curses.A_REVERSE | curses.A_BOLD
+                else:
+                    attr = curses.color_pair(2 if p_type == "title" else 1)
                 
                 try:
                     if p_type == "title":
                         self.screen.addstr(y_pos, (c - len(text)) // 2, text[:c-2], attr | curses.A_BOLD)
                     else:
-                        # 1. Рисуем основной текст строки
+                        # Рисуем основной текст строки
                         self.screen.addstr(y_pos, margin, text[:w_curr], attr)
                         
                         # 2. ПОДСВЕТКА СНОСОК
@@ -271,9 +286,10 @@ class MainWindow:
     def draw_status(self, r, c):
         if not self.show_status: return
         try:
-            # 1. Индикатор закладок
-            bm = " [M]" if self.bookmarks else ""
-            left = f"|==|:{self.width}{bm}"
+            # 1. Индикаторы закладок и голоса
+            bm = " [M]" if self.bookmarks else "    " 
+            vs = " [V]" if getattr(self, 'voice_active', False) else "    "
+            left = f"|==|:{str(self.width).ljust(3)}{bm}{vs}"
             
             # 2. Индикатор автоскролла [S:x]
             am_indicator = f"[S:{self.scroll_speed}] " if self.auto_scroll else ""
@@ -311,6 +327,76 @@ class MainWindow:
         except: pass
         self.screen.refresh()
 
+    def toggle_tts(self, stop=False):
+        import subprocess
+        # 1. Сначала ГАСИМ ВСЁ
+        was_active = getattr(self, 'voice_active', False)
+        self.voice_active = False 
+        
+        # Убиваем системный spd-say
+        try:
+            subprocess.run(['spd-say', '-S'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except: pass
+        
+        # Убиваем наш текущий процесс (espeak или spd-say)
+        if hasattr(self, 'tts_proc') and self.tts_proc:
+            try:
+                self.tts_proc.terminate()
+                self.tts_proc.wait(timeout=0.2) # Ждем немного, чтобы процесс реально сдох
+            except: pass
+            self.tts_proc = None
+
+        # Если мы нажали 'q' (stop=True) или если голос УЖЕ работал — выходим
+        if stop or was_active:
+            return 
+
+        # 2. Если голос был ВЫКЛЮЧЕН — включаем
+        self.voice_active = True
+        threading.Thread(target=self._tts_loop, daemon=True).start()
+
+    def _tts_loop(self):
+        import subprocess
+        while self.voice_active:
+            if self.par_index >= len(self.lines):
+                self.voice_active = False
+                break
+            
+            p_type, text = self.lines[self.par_index]
+            clean_text = re.sub(r'\[.*?\]', '', text).strip()
+            
+            if clean_text:
+                try:
+                    lang = getattr(self, 'tts_lang', 'ru').lower()
+                    spd_val = int((self.voice_speed - 100) / 2) + 20
+                    
+                    if lang == 'ru':
+                        # Для русского оставляем spd-say
+                        self.tts_proc = subprocess.Popen([
+                            'spd-say', '-o', 'rhvoice', '-l', 'ru', 
+                            '-r', str(spd_val), '-t', 'text', '-w', clean_text
+                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        # Для английского/немецкого — espeak-ng
+                        es_speed = int(175 * (self.voice_speed / 100.0))
+                        self.tts_proc = subprocess.Popen([
+                            'espeak-ng', '-v', lang, '-s', str(es_speed), clean_text
+                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    
+                    # Ждем окончания строки, но проверяем флаг voice_active
+                    while self.tts_proc.poll() is None:
+                        if not self.voice_active:
+                            self.tts_proc.terminate() # УБИВАЕМ ПРОЦЕСС, ЕСЛИ НАЖАЛИ СТОП
+                            return
+                        time.sleep(0.01)
+                except:
+                    self.voice_active = False
+                    break
+            
+            if self.voice_active:
+                time.sleep(0.1)
+                self.par_index += 1
+                curses.ungetch(curses.KEY_RESIZE)
+
     def run(self):
         self.screen.nodelay(True)
         self.screen.keypad(True)
@@ -337,9 +423,19 @@ class MainWindow:
 
             # 1. СИСТЕМНЫЕ (Выход, Настройки, Раскладка)
             if ch in [ord('q'), 1081]: # q или й
+                # Сначала проверяем: если работает голос — просто выключаем его
+                if getattr(self, 'voice_active', False):
+                    self.toggle_tts(stop=True)
+                    self.redraw_scr() # Перерисуем, чтобы убрать подсветку [V]
+                    continue # ОСТАЕМСЯ в программе
+                
+                # Если голоса нет, но активен поиск — гасим поиск
                 if self.search_query:
                     self.search_query = ""
+                    self.redraw_scr()
                     continue
+                
+                # Если ни голоса, ни поиска — тогда ВЫХОД
                 self.save_history()
                 break
 
@@ -368,6 +464,12 @@ class MainWindow:
             elif ch == ord('n'): self.find_next()
             elif ch == ord('N'): self.find_prev()
             elif ch == ord('f'): self.open_footnote()
+
+            # Назначаем 'V' (Voice) для голоса
+            elif ch == ord('V'): 
+                self.toggle_tts()
+                self.redraw_scr()
+
             elif ch == ord('m'):
                 line_data = self.lines[self.par_index]
                 text = line_data[1] if isinstance(line_data, tuple) else str(line_data)
@@ -440,6 +542,10 @@ class MainWindow:
                 except: pass
 
                 self.redraw_scr()
+            
+            # И не забудь добавить остановку голоса при выходе 'q'
+            if ch in [ord('q'), 1081]:
+                self.toggle_tts(stop=True) # Затыкаем голос при выходе
 
             # --- Скрыть/показать бар (H) ---
             elif ch == ord('H'):
@@ -565,7 +671,7 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.5")
+        print("fb2less version 0.9.6")
         return
 
     if args.help:

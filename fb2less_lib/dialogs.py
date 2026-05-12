@@ -199,8 +199,7 @@ def show_settings(app):
     scan_path = getattr(app, 'scan_path', conf.get("scan_path", os.getcwd()))
 
     cur = 0
-    # Высота 11 строк, чтобы влезли все пункты
-    w_win, h_win = min(c - 4, 60), 11
+    w_win, h_win = min(c - 4, 60), 12
     y, x = (r - h_win) // 2, (c - w_win) // 2
     
     try:
@@ -221,6 +220,8 @@ def show_settings(app):
                 f"{app.tr('set_path')}: {scan_path}",
                 app.tr('set_scan'),
                 app.tr('set_clear_lib'),
+                f"{app.tr('set_voice_speed')}: {app.voice_speed}%",
+                f"{app.tr('ui_tts_language')}: {app.tts_lang.upper()}", # Новый пункт 6
                 app.tr('set_save'),
                 app.tr('ui_back')
             ]
@@ -239,45 +240,43 @@ def show_settings(app):
                 cur = (cur + 1) % len(menu_items)
             elif key in [ord('k'), curses.KEY_UP]:
                 cur = (cur - 1) % len(menu_items)
+
+            # 2. РЕГУЛИРОВКА СТРЕЛКАМИ (Влево/Вправо)
+            elif key == curses.KEY_RIGHT:
+                if cur == 5: # Индекс для Скорости чтения
+                    app.voice_speed = min(200, app.voice_speed + 5)
+            elif key == curses.KEY_LEFT:
+                if cur == 5: # Твой индекс для Скорости чтения
+                    app.voice_speed = max(50, app.voice_speed - 5)
             
             # 2. Мгновенный выход по кнопкам
             elif key in [ord('q'), 27, ord('o'), 1097]:
                 curses.flushinp()
                 break
 
-            # 3. Обработка выбора (Enter)
             elif key in [10, 13, curses.KEY_ENTER]:
-                if cur == 0: # Язык
+                if cur == 0: # 1. Язык интерфейса
                     idx = app.available_langs.index(app.lang_code)
                     app.lang_code = app.available_langs[(idx + 1) % len(app.available_langs)]
                     app.load_lang(app.lang_code)
                     app.prepare_lines()
                     app.redraw_scr()
                 
-                elif cur == 1: # СТАТУС-БАР
+                elif cur == 1: # 2. Статус-бар
                     app.show_status = not app.show_status
-                    
-                    # 1. Сначала полностью очищаем нижнюю строку терминала (где был или будет бар)
                     try:
                         app.screen.move(r - 1, 0)
                         app.screen.clrtoeol()
-                        # Заливаем строку цветом фона терминала, чтобы убрать остатки
                         app.screen.addstr(r - 1, 0, " " * (c - 1), curses.color_pair(4))
                     except: pass
-
-                    # 2. Пересчитываем геометрию
                     app.prepare_lines() 
-                    
-                    # 3. Рисуем основной экран
                     app.redraw_scr() 
-                    
-                    # 4. Обновляем слои
                     sw.touchwin()
                     app.screen.noutrefresh()
                     sw.noutrefresh()
                     curses.doupdate()
                 
-                elif cur == 2: # Ввод пути
+                elif cur == 2: # 3. Ввод пути
                     curses.echo(); curses.curs_set(1)
                     prompt = "> "
                     sw.addstr(h_win-2, 2, " " * (w_win-4), curses.color_pair(5))
@@ -297,25 +296,31 @@ def show_settings(app):
                     except: pass
                     curses.noecho(); curses.curs_set(0)
 
-                elif cur == 3: # Сканирование
+                elif cur == 3: # 4. Сканирование
                     app.storage.scan_directory(app, custom_path=scan_path)
                     app.history_data = app.storage.load_full_history()
                 
-                elif cur == 4: # Очистка библиотеки
+                elif cur == 4: # 5. Очистка библиотеки
                     app.history_data = app.storage.clear_library(app.filename)
                     sw.addstr(h_win-2, 2, " Done! ".center(w_win-4), curses.color_pair(5))
                     sw.refresh(); time.sleep(0.5)
 
-                elif cur == 5: # Сохранить
-                    app.scan_path = scan_path
-                    app.save_history()
-                    curses.flushinp()
-                    break
+                elif cur == 5: # Скорость чтения
+                    app.voice_speed += 10
+                    if app.voice_speed > 200: app.voice_speed = 50
+
+                elif cur == 6: # ЯЗЫК ЧТЕНИЯ (TTS)
+                    idx = app.available_langs.index(app.tts_lang)
+                    app.tts_lang = app.available_langs[(idx + 1) % len(app.available_langs)]
+                    if app.voice_active:
+                        app.toggle_tts(stop=True); app.toggle_tts()
+
+                elif cur == 7: # Сохранить
+                    app.scan_path = scan_path; app.save_history()
+                    curses.flushinp(); break
                 
-                elif cur == 6: # Назад
-                    curses.flushinp()
-                    break
-                
+                elif cur == 8: # Назад
+                    curses.flushinp(); break                
                 # Возвращаем фокус на окно настроек после любого действия
                 sw.touchwin()
                 sw.refresh()

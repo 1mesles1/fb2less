@@ -54,6 +54,8 @@
     "set_path": "Directory path",
     "set_scan": "Scan directory",
     "set_clear_lib": "Clear library",
+    "set_voice_speed": "Voice Speed (left/right)",
+    "ui_tts_language": "Reading Language",
     "err_path_nf": "Path not found!",
     "set_save": "Save settings",
     "info_header": " ABOUT BOOK ",
