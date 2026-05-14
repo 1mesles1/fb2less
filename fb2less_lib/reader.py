@@ -30,12 +30,13 @@ class MainWindow:
         self.lang_code = conf.get("lang", "en")
         self.show_status = conf.get("status", 1)
         self.scan_path = conf.get("scan_path", os.getcwd())
-        self.tts_lang = conf.get("tts_lang", self.lang_code)
         self.tts_proc = None
         
         self.auto_scroll = False
         self.last_auto_time = time.time()
 
+        self.current_engine = conf.get("current_engine", "spd-say")
+        self.current_voice = conf.get("current_voice", "rhvoice")
         self.voice_speed = conf.get("voice_speed", 100)
         
         # 3. ПРОГРЕСС КНИГИ
@@ -93,8 +94,10 @@ class MainWindow:
             "lang": self.lang_code, 
             "status": 1 if self.show_status else 0,
             "voice_speed": getattr(self, 'voice_speed', 100),
-            "tts_lang": self.tts_lang,
-            "scan_path": getattr(self, 'scan_path', os.getcwd())
+            "scan_path": getattr(self, 'scan_path', os.getcwd()),
+            # ДОБАВЛЯЕМ ПАРАМЕТРЫ ОЗВУЧКИ ДЛЯ ПЕРЕЗАПИСИ НА ДИСК:
+            "current_engine": getattr(self, 'current_engine', 'spd-say'),
+            "current_voice": getattr(self, 'current_voice', 'rhvoice')
         }
         
         book_info = {
@@ -327,35 +330,74 @@ class MainWindow:
         except: pass
         self.screen.refresh()
 
-    def toggle_tts(self, stop=False):
+    def _get_engines(self):
+        """Возвращает список доступных в системе утилит TTS"""
+        import shutil
+        engines = []
+        if shutil.which('spd-say'): engines.append('spd-say')
+        if shutil.which('espeak-ng'): engines.append('espeak-ng')
+        return engines
+
+    def _get_voices(self, engine):
+        """Правильный парсинг установленных голосов в Arch Linux"""
         import subprocess
-        # 1. Сначала ГАСИМ ВСЁ
+        voices = [] # Список кортежей: (ID_для_запуска, Понятное_имя, Язык)
+        
+        if engine == 'spd-say':
+            try:
+                res = subprocess.run(['spd-say', '-L'], capture_output=True, text=True, timeout=1)
+                for line in res.stdout.splitlines():
+                    if line.strip() and not line.startswith('NAME'):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            # ID голоса, Отображаемое имя, Язык
+                            voices.append((parts[0], f"spd: {parts[0]} ({parts[1]})", parts[1]))
+            except: pass
+            if not voices: voices.append(('rhvoice', 'RHVoice (По умолчанию)', 'ru'))
+            
+        elif engine == 'espeak-ng':
+            try:
+                res = subprocess.run(['espeak-ng', '--voices'], capture_output=True, text=True, timeout=1)
+                for line in res.stdout.splitlines():
+                    parts = line.split()
+                    # Пропускаем заголовок таблицы espeak
+                    if len(parts) >= 5 and not parts[0].startswith('Pty'):
+                        lang = parts[1]
+                        voice_id = parts[4] if '/' in parts[4] else parts[3]
+                        voices.append((voice_id, f"espeak: {voice_id} ({lang})", lang))
+            except: pass
+            if not voices: voices.append(('ru', 'Espeak Ru (По умолчанию)', 'ru'))
+            
+        return voices
+
+    def toggle_tts(self, stop=False):
+        import subprocess, threading
         was_active = getattr(self, 'voice_active', False)
         self.voice_active = False 
         
-        # Убиваем системный spd-say
         try:
             subprocess.run(['spd-say', '-S'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except: pass
         
-        # Убиваем наш текущий процесс (espeak или spd-say)
         if hasattr(self, 'tts_proc') and self.tts_proc:
             try:
                 self.tts_proc.terminate()
-                self.tts_proc.wait(timeout=0.2) # Ждем немного, чтобы процесс реально сдох
+                self.tts_proc.wait(timeout=0.2)
             except: pass
             self.tts_proc = None
 
-        # Если мы нажали 'q' (stop=True) или если голос УЖЕ работал — выходим
         if stop or was_active:
             return 
 
-        # 2. Если голос был ВЫКЛЮЧЕН — включаем
+        # Инициализируем дефолты, если их еще нет в конфиге
+        if not hasattr(self, 'current_engine'): self.current_engine = 'spd-say'
+        if not hasattr(self, 'current_voice'): self.current_voice = 'rhvoice'
+
         self.voice_active = True
         threading.Thread(target=self._tts_loop, daemon=True).start()
 
     def _tts_loop(self):
-        import subprocess
+        import subprocess, re, time, curses
         while self.voice_active:
             if self.par_index >= len(self.lines):
                 self.voice_active = False
@@ -366,26 +408,25 @@ class MainWindow:
             
             if clean_text:
                 try:
-                    lang = getattr(self, 'tts_lang', 'ru').lower()
                     spd_val = int((self.voice_speed - 100) / 2) + 20
                     
-                    if lang == 'ru':
-                        # Для русского оставляем spd-say
-                        self.tts_proc = subprocess.Popen([
-                            'spd-say', '-o', 'rhvoice', '-l', 'ru', 
+                    voice_id_str = self.current_voice[0] if isinstance(self.current_voice, (list, tuple)) else str(self.current_voice)
+
+                    if self.current_engine == 'spd-say':
+                        full_cmd = [
+                            'spd-say', '-o', 'rhvoice', '-y', voice_id_str,
                             '-r', str(spd_val), '-t', 'text', '-w', clean_text
-                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    else:
-                        # Для английского/немецкого — espeak-ng
-                        es_speed = int(175 * (self.voice_speed / 100.0))
-                        self.tts_proc = subprocess.Popen([
-                            'espeak-ng', '-v', lang, '-s', str(es_speed), clean_text
-                        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        ]
+                    elif self.current_engine == 'espeak-ng':
+                        full_cmd = [
+                            'espeak-ng', '-v', voice_id_str, '-s', str(es_speed), clean_text
+                        ]
+
+                    self.tts_proc = subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     
-                    # Ждем окончания строки, но проверяем флаг voice_active
                     while self.tts_proc.poll() is None:
                         if not self.voice_active:
-                            self.tts_proc.terminate() # УБИВАЕМ ПРОЦЕСС, ЕСЛИ НАЖАЛИ СТОП
+                            self.tts_proc.terminate()
                             return
                         time.sleep(0.01)
                 except:
@@ -671,7 +712,7 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.6")
+        print("fb2less version 0.9.7")
         return
 
     if args.help:

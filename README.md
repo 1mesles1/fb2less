@@ -1,5 +1,5 @@
-# fb2less (v0.9.6)
-**12 May 2026**
+# fb2less (v0.9.7)
+**14 May 2026**
 
 Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
 
@@ -11,11 +11,12 @@ Advanced terminal-based eBook reader for FB2, EPUB, and TXT formats.
   - Persistent reading history and per-book settings.
   - Interactive library manager (`L`) with search and smart sorting.
   - **Sorting**: Organize your collection by **Title**, **Author**, or **Series** (`s`).
-- **Voice Reading (TTS)**: 
+- **Voice Reading (TTS)**:
   - Synchronized line-by-line speech generation (`V`).
+  - **Dynamic Engines & Voices**: Switch between `spd-say` and `espeak-ng` dynamically. Select any installed system voice via an interactive, scrollable popup menu.
   - **Visual Focus**: The currently read line is highlighted in real-time.
   - **Smart Pagination**: Automatically turns pages as the narrator finishes the text.
-  - **Multilingual Voices**: Independent language settings for reading and interface.
+  - **Multilingual Voices**: Automatically synchronizes the reading language with the selected system voice.
   - **Adjustable Speed**: Change speech rate (50% to 200%) on the fly in settings.
 - **Rich Navigation**:
   - Chapter navigation (`[` / `]`) and Table of Contents (`t`).
@@ -65,4 +66,4 @@ makepkg -si
 
 ## Requirements
 For the **Voice Reading (TTS)** feature, you need to have the following installed:
-- **Linux**: `speech-dispatcher` and at least one engine like `espeak-ng` or `rhvoice`.
+- **Linux**: `speech-dispatcher` (providing `spd-say`) and at least one engine like `espeak-ng` or `rhvoice` (e.g., `rhvoice-ru` for high-quality Russian voices).

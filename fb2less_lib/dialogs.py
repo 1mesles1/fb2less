@@ -195,11 +195,17 @@ def show_settings(app):
     import curses, os, time
     r, c = app.screen.getmaxyx()
     conf = app.storage.load_config()
-    # Берем путь из памяти приложения или из конфига
     scan_path = getattr(app, 'scan_path', conf.get("scan_path", os.getcwd()))
 
+    # Инициализируем дефолтные переменные в объекте приложения, если их нет
+    if not hasattr(app, 'current_engine'): 
+        app.current_engine = conf.get('current_engine', 'spd-say')
+    if not hasattr(app, 'current_voice'): 
+        app.current_voice = conf.get('current_voice', 'rhvoice')
+
     cur = 0
-    w_win, h_win = min(c - 4, 60), 12
+    # Увеличиваем высоту окна до 14, так как пунктов стало больше
+    w_win, h_win = min(c - 4, 60), 13
     y, x = (r - h_win) // 2, (c - w_win) // 2
     
     try:
@@ -214,6 +220,8 @@ def show_settings(app):
             sw.addstr(0, (w_win - len(title)) // 2, title, curses.A_BOLD)
             
             st_val = app.tr('ui_on') if app.show_status else app.tr('ui_off')
+            
+            # Динамически формируем пункты меню
             menu_items = [
                 f"{app.tr('ui_language')}: {app.lang_code.upper()}",
                 f"{app.tr('set_status')}: {st_val}",
@@ -221,48 +229,45 @@ def show_settings(app):
                 app.tr('set_scan'),
                 app.tr('set_clear_lib'),
                 f"{app.tr('set_voice_speed')}: {app.voice_speed}%",
-                f"{app.tr('ui_tts_language')}: {app.tts_lang.upper()}", # Новый пункт 6
+                f"{app.tr('ui_tts_engine')}: {app.current_engine}",
+                f"{app.tr('ui_tts_voice')}: {app.current_voice}",
                 app.tr('set_save'),
                 app.tr('ui_back')
             ]
 
             for i, item in enumerate(menu_items):
                 style = curses.A_REVERSE if i == cur else curses.A_NORMAL
-                # Обрезаем текст, если он шире окна
                 d_text = item if len(item) < w_win-4 else item[:w_win-7] + "..."
                 sw.addstr(i + 1, 2, d_text.ljust(w_win - 4), style)
 
             sw.refresh()
             key = sw.getch()
 
-            # 1. Навигация
             if key in [ord('j'), curses.KEY_DOWN]:
                 cur = (cur + 1) % len(menu_items)
             elif key in [ord('k'), curses.KEY_UP]:
                 cur = (cur - 1) % len(menu_items)
 
-            # 2. РЕГУЛИРОВКА СТРЕЛКАМИ (Влево/Вправо)
             elif key == curses.KEY_RIGHT:
-                if cur == 5: # Индекс для Скорости чтения
+                if cur == 5:
                     app.voice_speed = min(200, app.voice_speed + 5)
             elif key == curses.KEY_LEFT:
-                if cur == 5: # Твой индекс для Скорости чтения
+                if cur == 5:
                     app.voice_speed = max(50, app.voice_speed - 5)
             
-            # 2. Мгновенный выход по кнопкам
             elif key in [ord('q'), 27, ord('o'), 1097]:
                 curses.flushinp()
                 break
 
             elif key in [10, 13, curses.KEY_ENTER]:
-                if cur == 0: # 1. Язык интерфейса
+                if cur == 0:
                     idx = app.available_langs.index(app.lang_code)
                     app.lang_code = app.available_langs[(idx + 1) % len(app.available_langs)]
                     app.load_lang(app.lang_code)
                     app.prepare_lines()
                     app.redraw_scr()
                 
-                elif cur == 1: # 2. Статус-бар
+                elif cur == 1:
                     app.show_status = not app.show_status
                     try:
                         app.screen.move(r - 1, 0)
@@ -276,7 +281,7 @@ def show_settings(app):
                     sw.noutrefresh()
                     curses.doupdate()
                 
-                elif cur == 2: # 3. Ввод пути
+                elif cur == 2:
                     curses.echo(); curses.curs_set(1)
                     prompt = "> "
                     sw.addstr(h_win-2, 2, " " * (w_win-4), curses.color_pair(5))
@@ -296,11 +301,11 @@ def show_settings(app):
                     except: pass
                     curses.noecho(); curses.curs_set(0)
 
-                elif cur == 3: # 4. Сканирование
+                elif cur == 3:
                     app.storage.scan_directory(app, custom_path=scan_path)
                     app.history_data = app.storage.load_full_history()
                 
-                elif cur == 4: # 5. Очистка библиотеки
+                elif cur == 4:
                     app.history_data = app.storage.clear_library(app.filename)
                     sw.addstr(h_win-2, 2, " Done! ".center(w_win-4), curses.color_pair(5))
                     sw.refresh(); time.sleep(0.5)
@@ -309,27 +314,113 @@ def show_settings(app):
                     app.voice_speed += 10
                     if app.voice_speed > 200: app.voice_speed = 50
 
-                elif cur == 6: # ЯЗЫК ЧТЕНИЯ (TTS)
-                    idx = app.available_langs.index(app.tts_lang)
-                    app.tts_lang = app.available_langs[(idx + 1) % len(app.available_langs)]
-                    if app.voice_active:
-                        app.toggle_tts(stop=True); app.toggle_tts()
+                elif cur == 6: # ВЫБОР ДВИЖКА ЧТЕНИЯ (Бывший 7)
+                    engines = app._get_engines()
+                    if engines:
+                        idx = engines.index(app.current_engine) if app.current_engine in engines else 0
+                        app.current_engine = engines[(idx + 1) % len(engines)]
+                        voices = app._get_voices(app.current_engine)
+                        if voices: 
+                            app.current_voice = voices[0][0]
+                            app.tts_lang = voices[0][2]
+                        if app.voice_active: app.toggle_tts(stop=True); app.toggle_tts()
 
-                elif cur == 7: # Сохранить
-                    app.scan_path = scan_path; app.save_history()
+                elif cur == 7: # ВЫБОР КОНКРЕТНОГО ГОЛОСА
+                    voices = app._get_voices(app.current_engine)
+                    if voices:
+                        # Передаем объект app третьим аргументом
+                        chosen_voice_id, chosen_lang = show_voice_selector(app.screen, voices, app)
+                        if chosen_voice_id:
+                            app.current_voice = chosen_voice_id
+                            app.tts_lang = chosen_lang
+                            if app.voice_active: app.toggle_tts(stop=True);
+
+                elif cur == 8: # Сохранить (Бывший 9)
+                    app.scan_path = scan_path
+                    conf['current_engine'] = app.current_engine
+                    conf['current_voice'] = app.current_voice
+                    conf['tts_lang'] = app.tts_lang
+                    app.storage.save_config(conf)
+                    app.save_history()
                     curses.flushinp(); break
                 
-                elif cur == 8: # Назад
+                elif cur == 9: # Назад (Бывший 10)
                     curses.flushinp(); break                
-                # Возвращаем фокус на окно настроек после любого действия
+
                 sw.touchwin()
                 sw.refresh()
     except: pass
 
     curses.napms(50)
     curses.flushinp()
-    
     app.redraw_scr()
+
+def show_voice_selector(screen, voices, app):
+    """Всплывающее окно для выбора голоса из динамического списка"""
+    import curses
+    r, c = screen.getmaxyx()
+    
+    current_voice_id = getattr(app, 'current_voice', '')
+    v_cur = 0
+    for idx, v in enumerate(voices):
+        if v[0] == current_voice_id:
+            v_cur = idx
+            break
+            
+    # Уменьшенная высота окна без лишних пустых строк
+    v_h, v_w = min(r - 4, len(voices) + 3), min(c - 6, 50)
+    v_y, v_x = (r - v_h) // 2, (c - v_w) // 2
+    
+    v_win = curses.newwin(v_h, v_w, v_y, v_x)
+    v_win.keypad(True)
+    v_win.bkgd(" ", curses.color_pair(5))
+    
+    scroll_offset = 0
+    max_visible_rows = v_h - 2
+
+    while True:
+        v_win.erase()
+        v_win.box()
+        
+        # Динамический перевод заголовка и его строгое центрирование
+        title = f" {app.tr('ui_choose_voice')} "
+        title_x = (v_w - len(title)) // 2
+        v_win.addstr(0, max(0, title_x), title, curses.A_BOLD)
+        
+        if v_cur < scroll_offset:
+            scroll_offset = v_cur
+        elif v_cur >= scroll_offset + max_visible_rows:
+            scroll_offset = v_cur - max_visible_rows + 1
+
+        for i in range(max_visible_rows):
+            item_idx = i + scroll_offset
+            if item_idx >= len(voices): break
+            
+            voice_id, display_name, lang = voices[item_idx]
+            style = curses.A_REVERSE if item_idx == v_cur else curses.A_NORMAL
+            
+            d_name = display_name if len(display_name) < v_w-4 else display_name[:v_w-7] + "..."
+            v_win.addstr(i + 1, 2, d_name.ljust(v_w - 4), style)
+            
+        v_win.refresh()
+        k = v_win.getch()
+        
+        if k in [ord('j'), curses.KEY_DOWN]:
+            v_cur = (v_cur + 1) % len(voices)
+        elif k in [ord('k'), curses.KEY_UP]:
+            v_cur = (v_cur - 1) % len(voices)
+        elif k in [27, ord('q')]:
+            v_win.erase()
+            v_win.refresh()
+            del v_win
+            return None, None
+        elif k in [10, 13, curses.KEY_ENTER]:
+            selected_voice_id = voices[v_cur][0]
+            selected_lang = voices[v_cur][2]
+            v_win.erase()
+            v_win.refresh()
+            del v_win
+            return selected_voice_id, selected_lang
 
 def show_library(app):
     hist_data = app.history_data
