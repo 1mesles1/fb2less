@@ -14,8 +14,8 @@ optdepends=(
 )
 makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
 
-
-source=("git+github.com{pkgver}")
+# Ссылка соберется автоматически из переменной url
+source=("git+${url}.git#tag=v${pkgver}")
 sha256sums=('SKIP')
 
 build() {
