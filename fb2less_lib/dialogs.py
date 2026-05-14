@@ -13,7 +13,6 @@ def show_help(app):
         hw.keypad(True)
         hw.bkgd(" ", curses.color_pair(1))
         
-        # visible_rows теперь больше, так как мы не тратим строки на header внутри
         cur_top, visible_rows = 0, h_h - 4 
         
         while True:
@@ -373,7 +372,7 @@ def show_voice_selector(screen, voices, app):
     
     v_win = curses.newwin(v_h, v_w, v_y, v_x)
     v_win.keypad(True)
-    v_win.bkgd(" ", curses.color_pair(5))
+    v_win.bkgd(" ", curses.color_pair(1))
     
     scroll_offset = 0
     max_visible_rows = v_h - 2

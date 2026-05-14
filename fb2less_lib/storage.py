@@ -29,16 +29,14 @@ class Storage:
 
     def save_all(self, config_data, history_data, current_book_info=None):
         try:
-            # Сохраняем глобальный конфиг (язык, статус-бар, ПУТЬ)
             with open(self.config_file, "w", encoding='utf-8') as f:
-                json.dump(config_data, f, ensure_ascii=False, indent=4)
+                json.dump(config_data, f, ensure_ascii=False, indent=4, default=str)
 
-            # Если передана инфа о книге, обновляем её в истории
             if current_book_info:
                 history_data[self.filename] = current_book_info
             
             with open(self.history_file, "w", encoding='utf-8') as f:
-                json.dump(history_data, f, ensure_ascii=False, indent=4)
+                json.dump(history_data, f, ensure_ascii=False, indent=4, default=str)
         except: pass
 
     def clear_library(self, current_filename):
@@ -63,7 +61,9 @@ class Storage:
         r, c = app.screen.getmaxyx()
         # Создаем окно прогресса
         sw = curses.newwin(3, 46, (r-3)//2, (c-46)//2)
-        sw.bkgd(" ", curses.color_pair(5))
+        
+        # ИСПРАВЛЕНО: Переводим окно на пару 1 (основной цвет книги и настроек)
+        sw.bkgd(" ", curses.color_pair(1))
         sw.box()
         
         # Определяем путь для сканирования
@@ -72,13 +72,13 @@ class Storage:
 
         if not os.path.isdir(start_dir):
             err_msg = f"! {app.tr('err_path_nf')} !"
-            sw.addstr(1, (46-len(err_msg))//2, err_msg, curses.color_pair(2))
+            sw.addstr(1, (46-len(err_msg))//2, err_msg, curses.color_pair(1) | curses.A_BOLD)
             sw.refresh()
             time.sleep(1.5)
             return
             
         scan_msg = f"{app.tr('msg_scanning')}..."
-        sw.addstr(1, (46-len(scan_msg))//2, scan_msg)
+        sw.addstr(1, (46-len(scan_msg))//2, scan_msg, curses.color_pair(1))
         sw.refresh()
 
         found_new = 0
@@ -148,7 +148,7 @@ class Storage:
             f"({app.tr('scan_new')}: {found_new}) / "
             f"{app.tr('scan_del')}: {deleted_count}"
         )
-        sw.addstr(1, max(1, (46 - len(res_msg)) // 2), res_msg[:44])
+        sw.addstr(1, max(1, (46 - len(res_msg)) // 2), res_msg[:44], curses.color_pair(1))
         sw.refresh()
         time.sleep(1.5)
         

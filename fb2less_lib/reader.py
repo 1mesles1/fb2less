@@ -4,7 +4,7 @@ from .layout import prepare_layout
 from .txt_parser import txt_parse
 from .epub_parser import epub_parse
 from .storage import Storage
-from .import dialogs
+from . import dialogs
 
 class MainWindow:
     def __init__(self, stdscr, filename):
@@ -56,6 +56,13 @@ class MainWindow:
         self.load_lang(self.lang_code)
         
         # 5. ЗАГРУЗКА КОНТЕНТА
+        self._cached_width = None
+        self._cached_lines = None
+        self._cached_toc = None
+        self._last_parsed_filename = None
+        self._last_parsed_content = None
+        self._footnote_re = re.compile(r'\[(.*?)\]')
+        self._search_re = None
         self.reload_content()
 
         self.search_query = ""
@@ -64,6 +71,15 @@ class MainWindow:
         self.update_colors()
         self.prepare_lines()
         self.run()
+
+    @property
+    def border_padding(self):
+        """Возвращает вертикальный отступ в зависимости от стиля рамки"""
+        if self.show_border == 2:
+            return 3
+        elif self.show_border == 1:
+            return 2
+        return 1
 
     def update_colors(self): 
         curses.init_pair(1, self.fg, self.bg)
@@ -94,24 +110,56 @@ class MainWindow:
             "lang": self.lang_code, 
             "status": 1 if self.show_status else 0,
             "voice_speed": getattr(self, 'voice_speed', 100),
+            "tts_lang": getattr(self, 'tts_lang', 'ru'),
             "scan_path": getattr(self, 'scan_path', os.getcwd()),
             # ДОБАВЛЯЕМ ПАРАМЕТРЫ ОЗВУЧКИ ДЛЯ ПЕРЕЗАПИСИ НА ДИСК:
             "current_engine": getattr(self, 'current_engine', 'spd-say'),
             "current_voice": getattr(self, 'current_voice', 'rhvoice')
         }
         
+        def clean_meta(text):
+            if not text: 
+                return ""
+            # Кодируем в utf-8 и декодируем с заменой невалидных символов, гарантируя валидный JSON
+            return str(text).encode('utf-8', errors='ignore').decode('utf-8', errors='replace')
+
         book_info = {
             "pos": self.par_index,
             "bookmarks": self.bookmarks,
-            "title": self.content.meta.get('title', self.tr('meta_unknown_title')),
-            "author": self.content.meta.get('author', self.tr('meta_unknown')),
-            "series": self.content.meta.get('series', ''),
+            "title": clean_meta(self.content.meta.get('title', self.tr('meta_unknown_title'))),
+            "author": clean_meta(self.content.meta.get('author', self.tr('meta_unknown'))),
+            "series": clean_meta(self.content.meta.get('series', '')),
             "time": time.time() # Это важно для автооткрытия последней книги
         }
         
         self.storage.save_all(config_data, self.history_data, book_info)
 
     def reload_content(self):
+        import os
+        if not self.filename or not os.path.exists(self.filename):
+            return
+
+        # Сбрасываем кэш разметки экрана при открытии любой книги
+        self._cached_width = None
+        self._cached_lines = None
+        self._cached_toc = None
+
+        file_size_mb = os.path.getsize(self.filename) / (1024 * 1024)
+        if file_size_mb > 25: 
+            try:
+                self.screen.attron(curses.color_pair(2))
+                r, c = self.screen.getmaxyx()
+                msg = f"! Warning: Large file ({file_size_mb:.1f} MB), parsing may take a moment... !"
+                self.screen.addstr(r - 1, 0, msg[:c-1].center(c-1))
+                self.screen.refresh()
+            except: pass
+
+        if getattr(self, '_last_parsed_filename', None) == self.filename and getattr(self, '_last_parsed_content', None) is not None:
+            self.content = self._last_parsed_content
+            self.notes = getattr(self.content, 'notes', {})
+            return
+
+        # Нативный парсинг в зависимости от расширения файла
         ext = self.filename.lower()
         if ext.endswith('.txt'):
             self.content = txt_parse(self.filename, self.tr('meta_unknown'))
@@ -124,15 +172,29 @@ class MainWindow:
         if not self.content.paragraphs:
             self.content.paragraphs = [('body', self.tr('err_empty_file'))]
 
-    def prepare_lines(self):
+        # Сохраняем успешно распарсенный контент в глобальный кэш
+        self._last_parsed_filename = self.filename
+        self._last_parsed_content = self.content
+
+    def prepare_lines(self, force=False):
         r, c = self.screen.getmaxyx()
         border_space = 2 if self.show_border > 0 else 0
         w = min(c - border_space - 4, self.width)
+        
+        if not force and getattr(self, '_cached_width', None) == w and getattr(self, '_cached_lines', None) is not None:
+            self.lines = self._cached_lines
+            self.toc = self._cached_toc
+            return
+
         self.lines, self.toc = prepare_layout(
             self.content.paragraphs, w, 
             self.content.meta.get('author', ''),
             notes=self.notes, notes_label=self.tr('ui_notes_section')
         )
+        
+        self._cached_width = w
+        self._cached_lines = self.lines
+        self._cached_toc = self.toc
 
     def jump_chapter(self, direction):
         if not self.toc: return
@@ -161,21 +223,36 @@ class MainWindow:
 
     def animate_flip(self, direction):
         r, c = self.screen.getmaxyx()
-        d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+        f_off = 1 if self.show_status else 0
         
-        # Границы листа для анимации
-        avail_c = c - (4 if self.show_border == 2 else 2)
-        w_curr = min(avail_c - 4, self.width)
+        # Математически точный расчет высоты текстового поля для анимации
+        if self.show_border == 2:
+            t_off, d_h, y_b = 1, r - 3 - f_off, r - 1 - f_off
+        elif self.show_border == 1:
+            t_off, d_h, y_b = 1, r - 2 - f_off, r - 1 - f_off
+        else:
+            t_off, d_h, y_b = 0, r - f_off, r - f_off
+            
+        y_t = t_off
+        
+        # Полная синхронизация расчета ширины и margin с методом prepare_lines
+        border_space = 2 if self.show_border > 0 else 0
+        w_curr = min(c - border_space - 4, self.width)
         margin = (c - w_curr) // 2
-        x_l = (0 if self.show_border == 1 else margin - 2) + 1
-        x_r = (c - 1 if self.show_border == 1 else margin + w_curr + 1)
-        y_t, y_b = 1, r - 2
         
+        # Границы стирания старой страницы
+        if self.show_border == 0:
+            x_l, x_r = 0, c
+        elif self.show_border == 1:
+            x_l, x_r = 1, c - 1
+        else:
+            x_l, x_r = margin - 1, margin + w_curr + 1
+            
         width = x_r - x_l
         step = max(1, width // 20)
 
         # ФАЗА 1: Уход (для режимов 1, 3, 4 медленно, для 2 - мгновенно)
-        if self.flip_mode in [1, 3, 4]:
+        if self.flip_mode in [1, 3, 4]:  # ИСПРАВЛЕНО: Восстановлен список режимов
             rng = range(x_r-1, x_l-step, -step) if direction > 0 else range(x_l, x_r+step, step)
             for x in rng:
                 for cx in range(x, x+step if direction > 0 else x-step, 1 if direction > 0 else -1):
@@ -185,16 +262,18 @@ class MainWindow:
             for x in range(x_l, x_r): self.screen.vline(y_t, x, ord(' ')|curses.color_pair(3), y_b-y_t)
             self.screen.refresh()
 
+        # Меняем страницу
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
         # ФАЗА 2: Появление
-        if self.flip_mode in [2, 3, 4]:
-            for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2,3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
+        if self.flip_mode in [2, 3, 4]:  # ИСПРАВЛЕНО: Восстановлен список режимов
+            for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
                 self.redraw_scr()
-                cov_rng = range(x_l, x) if (self.flip_mode in [2,3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
+                cov_rng = range(x_l, x) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
                 for cx in cov_rng: self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
                 self.screen.refresh(); time.sleep(0.01 if self.flip_mode != 2 else 0.02)
-        else: self.redraw_scr()
+        else: 
+            self.redraw_scr()
 
     def redraw_scr(self):
         r, c = self.screen.getmaxyx()
@@ -257,7 +336,6 @@ class MainWindow:
                 is_reading = (getattr(self, 'voice_active', False) and idx == self.par_index)
                 
                 if is_reading:
-                    # Строка, которую читает робот, будет яркой и инвертированной
                     attr = curses.color_pair(2) | curses.A_REVERSE | curses.A_BOLD
                 else:
                     attr = curses.color_pair(2 if p_type == "title" else 1)
@@ -269,17 +347,15 @@ class MainWindow:
                         # Рисуем основной текст строки
                         self.screen.addstr(y_pos, margin, text[:w_curr], attr)
                         
-                        # 2. ПОДСВЕТКА СНОСОК
-                        for m in re.finditer(r'\[(.*?)\]', text[:w_curr]):
+                        # 2. ПОДСВЕТКА СНОСОК (Оптимизировано через скомпилированную регулярку)
+                        for m in self._footnote_re.finditer(text[:w_curr]):
                             self.screen.addstr(y_pos, margin + m.start(), m.group(0), curses.color_pair(2) | curses.A_BOLD)
                             
-                        # 3. ПОДСВЕТКА ПОИСКА
-                        if self.search_query:
-                            # Ищем все вхождения поискового запроса (без учета регистра)
-                            for m in re.finditer(re.escape(self.search_query), text[:w_curr], re.IGNORECASE):
+                        # 3. ПОДСВЕТКА ПОИСКА (Оптимизировано через скомпилированную регулярку)
+                        if self._search_re:
+                            for m in self._search_re.finditer(text[:w_curr]):
                                 start_x = m.start()
-                                word = text[start_x : start_x + len(self.search_query)]
-                                # Красим в инвертированный цвет заголовка (или любой другой заметный)
+                                word = m.group(0)  # ИСПРАВЛЕНО: Сохраняет оригинальный регистр букв книги
                                 self.screen.addstr(y_pos, margin + start_x, word, curses.color_pair(2) | curses.A_REVERSE)
                 except: pass
         
@@ -299,33 +375,33 @@ class MainWindow:
             
             mid = f"{os.path.basename(self.filename)} [{self.content.encoding}]"
             
-            # 3. ФИКСИРОВАННЫЕ ПРОЦЕНТЫ
-            # Используем rjust(4), чтобы под "100%" всегда было 4 символа (три цифры + %)
+            # 3. ИСПРАВЛЕНО: Безопасный расчет процентов без риска ZeroDivisionError
             total = len(self.lines)
-            pct_val = min(100, int(((self.par_index + r) / total) * 100)) if total > 0 else 0
+            if total > 0:
+                pct_val = min(100, int((self.par_index / total) * 100))
+            else:
+                pct_val = 0
+                
             pct_str = f"{pct_val}%".rjust(4) 
-            
             bar = f"[{'█'*(pct_val//10)}{' '*(10-(pct_val//10))}] {pct_str}"
             
             mode_names = self.tr('ui_mode_names')
             f_mode = mode_names[self.flip_mode] if isinstance(mode_names, list) else "STD"
             
-            # Собираем правую часть: [Скорость] [Режим] [Бар Проценты] Язык
             right = f"{am_indicator}[{f_mode}] {bar}  {self.tr('ui_lang_name')} "
 
             # РИСОВАНИЕ
             self.screen.attron(curses.color_pair(5))
             self.screen.move(r - 1, 0)
             self.screen.clrtoeol()
-            self.screen.addstr(r - 1, 0, " " * (c - 1)) # Заливка всей строки
+            self.screen.addstr(r - 1, 0, " " * (c - 1)) # Оставляем последнюю ячейку пустой!
 
             if c > 10:
                 self.screen.addstr(r - 1, 1, left[:c-2])
             if c > len(mid) + len(right) + 20:
                 self.screen.addstr(r - 1, (c - len(mid)) // 2, mid)
             if c > len(right) + 5:
-                # Печатаем правую часть с конца
-                self.screen.addstr(r - 1, c - len(right), right)
+                self.screen.addstr(r - 1, c - len(right) - 1, right)
             self.screen.attroff(curses.color_pair(5))
         except: pass
         self.screen.refresh()
@@ -341,7 +417,7 @@ class MainWindow:
     def _get_voices(self, engine):
         """Правильный парсинг установленных голосов в Arch Linux"""
         import subprocess
-        voices = [] # Список кортежей: (ID_для_запуска, Понятное_имя, Язык)
+        voices = []
         
         if engine == 'spd-say':
             try:
@@ -409,7 +485,6 @@ class MainWindow:
             if clean_text:
                 try:
                     spd_val = int((self.voice_speed - 100) / 2) + 20
-                    
                     voice_id_str = self.current_voice[0] if isinstance(self.current_voice, (list, tuple)) else str(self.current_voice)
 
                     if self.current_engine == 'spd-say':
@@ -418,6 +493,8 @@ class MainWindow:
                             '-r', str(spd_val), '-t', 'text', '-w', clean_text
                         ]
                     elif self.current_engine == 'espeak-ng':
+                        # ИСПРАВЛЕНО: возвращен расчет скорости, без которого espeak-ng падал с NameError
+                        es_speed = int(175 * (self.voice_speed / 100.0))
                         full_cmd = [
                             'espeak-ng', '-v', voice_id_str, '-s', str(es_speed), clean_text
                         ]
@@ -445,8 +522,11 @@ class MainWindow:
         last_size = None
 
         while True:
+            # УБРАНО: Никаких блокирующих очередей tts_queue от ИИ!
+            
             r, c = self.screen.getmaxyx()
-            size = self.screen.getmaxyx()
+            size = (r, c)
+            
             if size != last_size:
                 self.prepare_lines()
                 last_size = size
@@ -462,25 +542,20 @@ class MainWindow:
                 time.sleep(0.01)
                 continue
 
-            # 1. СИСТЕМНЫЕ (Выход, Настройки, Раскладка)
-            if ch in [ord('q'), 1081]: # q или й
-                # Сначала проверяем: если работает голос — просто выключаем его
+            # 1. СИСТЕМНЫЕ
+            if ch in [ord('q'), 1081]:
                 if getattr(self, 'voice_active', False):
                     self.toggle_tts(stop=True)
-                    self.redraw_scr() # Перерисуем, чтобы убрать подсветку [V]
-                    continue # ОСТАЕМСЯ в программе
-                
-                # Если голоса нет, но активен поиск — гасим поиск
+                    self.redraw_scr()
+                    continue
                 if self.search_query:
                     self.search_query = ""
                     self.redraw_scr()
                     continue
-                
-                # Если ни голоса, ни поиска — тогда ВЫХОД
                 self.save_history()
                 break
 
-            elif ch in [ord('o'), 1097]: # o или щ
+            elif ch in [ord('o'), 1097]:
                 dialogs.show_settings(self)
                 curses.flushinp()
                 while self.screen.getch() != -1: pass
@@ -491,22 +566,22 @@ class MainWindow:
             if ch in [ord(']'), 1098]: ch = ord(']')
 
             # 2. ДИАЛОГИ И ИНФО
-            if ch == ord('h'): dialogs.show_help(self)
-            elif ch == ord('i'): dialogs.show_info(self)
-            elif ch == ord('L'): 
-                dialogs.show_library(self)
+            if ch == ord('h'): dialogs.show_help(self); continue
+            elif ch == ord('i'): dialogs.show_info(self); continue
+            elif ch == ord('L'): dialogs.show_library(self); continue
+            elif ch == ord('t'): dialogs.show_toc(self); continue
+            elif ch == ord('M'): dialogs.show_bookmarks(self); continue
+            elif ch == ord('Z'): 
+                self.storage.scan_directory(self)
+                self.redraw_scr()
                 continue
-            elif ch == ord('t'): dialogs.show_toc(self)
-            elif ch == ord('M'): dialogs.show_bookmarks(self)
-            elif ch == ord('Z'): self.storage.scan_directory(self)
 
             # 3. ПОИСК, СНОСКИ, ЗАКЛАДКИ
-            elif ch == ord('/'): self.do_search()
-            elif ch == ord('n'): self.find_next()
-            elif ch == ord('N'): self.find_prev()
-            elif ch == ord('f'): self.open_footnote()
+            elif ch == ord('/'): self.do_search(); continue
+            elif ch == ord('n'): self.find_next(); self.redraw_scr()
+            elif ch == ord('N'): self.find_prev(); self.redraw_scr()
+            elif ch == ord('f'): self.open_footnote(); continue
 
-            # Назначаем 'V' (Voice) для голоса
             elif ch == ord('V'): 
                 self.toggle_tts()
                 self.redraw_scr()
@@ -516,96 +591,104 @@ class MainWindow:
                 text = line_data[1] if isinstance(line_data, tuple) else str(line_data)
                 self.bookmarks.append({"pos": self.par_index, "text": text[:30].strip() + "..."})
                 self.save_history()
+                self.redraw_scr()
 
-            # 4. НАВИГАЦИЯ (Стрелки, j/k, Home/End)
+            # 4. НАВИГАЦИЯ
             elif ch in [ord('j'), curses.KEY_DOWN]: 
-                self.par_index = min(len(self.lines)-1, self.par_index + 1)
+                r, c = self.screen.getmaxyx()
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
+                old_pos = self.par_index
+                self.par_index = min(max(0, len(self.lines) - d_h), self.par_index + 1)
+                if old_pos != self.par_index: self.redraw_scr()
             elif ch in [ord('k'), curses.KEY_UP]: 
+                old_pos = self.par_index
                 self.par_index = max(0, self.par_index - 1)
+                if old_pos != self.par_index: self.redraw_scr()
             elif ch == curses.KEY_HOME or ch == ord('g'): 
                 self.par_index = 0
+                self.redraw_scr()
             elif ch == curses.KEY_END or ch == ord('G'):
                 r, c = self.screen.getmaxyx()
-                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
                 self.par_index = max(0, len(self.lines) - d_h)
-            elif ch == ord('['): self.jump_chapter(-1)
-            elif ch == ord(']'): self.jump_chapter(1)
+                self.redraw_scr()
+            elif ch == ord('['): self.jump_chapter(-1); self.redraw_scr()
+            elif ch == ord(']'): self.jump_chapter(1); self.redraw_scr()
 
-            # 5. ПОСТРАНИЧНОЕ ЛИСТАНИЕ (с анимацией)
+            # 5. ПОСТРАНИЧНОЕ ЛИСТАНИЕ
             elif ch in [ord(' '), curses.KEY_NPAGE, curses.KEY_RIGHT]: 
                 r, c = self.screen.getmaxyx()
-                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
                 if self.flip_mode == 0: 
-                    self.par_index = min(len(self.lines)-1, self.par_index + d_h)
+                    self.par_index = min(max(0, len(self.lines) - d_h), self.par_index + d_h)
+                    self.redraw_scr()
                 elif self.par_index < len(self.lines) - d_h:
                     self.animate_flip(1)
-            elif ch == ord('d'): # Пол-экрана вперед
-                self.par_index = min(len(self.lines)-1, self.par_index + (r-2)//2)
-            elif ch == ord('u'): # Пол-экрана назад
-                self.par_index = max(0, self.par_index - (r-2)//2)
+            elif ch == ord('d'): 
+                r, c = self.screen.getmaxyx()
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
+                self.par_index = min(max(0, len(self.lines) - d_h), self.par_index + d_h // 2)
+                self.redraw_scr()
+            elif ch == ord('u'): 
+                r, c = self.screen.getmaxyx()
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
+                self.par_index = max(0, self.par_index - d_h // 2)
+                self.redraw_scr()
 
             elif ch in [curses.KEY_PPAGE, curses.KEY_LEFT]: 
                 r, c = self.screen.getmaxyx()
-                d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+                f_off = 1 if self.show_status else 0
+                d_h = r - self.border_padding - f_off
                 if self.flip_mode == 0: 
                     self.par_index = max(0, self.par_index - d_h)
+                    self.redraw_scr()
                 elif self.par_index > 0:
                     self.animate_flip(-1)
 
-            # 6. ГОРЯЧИЕ КЛАВИШИ ВИДА И АВТОСКРОЛЛА
+            # 6. ГОРЯЧИЕ КЛАВИШИ ВИДА
             elif ch == ord('a'): 
                 self.auto_scroll = not self.auto_scroll
                 self.last_auto_time = time.time()
                 self.redraw_scr()
-            elif ch == ord('s') and self.auto_scroll: self.scroll_speed = min(10, self.scroll_speed + 1)
-            elif ch == ord('S') and self.auto_scroll: self.scroll_speed = max(1, self.scroll_speed - 1)
-            elif ch == ord('c'): self.fg = (self.fg + 1) % 8; self.update_colors()
-            elif ch == ord('b'): self.bg = (self.bg + 1) % 8; self.update_colors()
-            elif ch == ord('v'): self.head_color = (self.head_color + 1) % 8; self.update_colors()
-            elif ch == ord('B'): self.show_border = (self.show_border + 1) % 3; self.prepare_lines()
+            elif ch == ord('s') and self.auto_scroll: self.scroll_speed = min(10, self.scroll_speed + 1); self.redraw_scr()
+            elif ch == ord('S') and self.auto_scroll: self.scroll_speed = max(1, self.scroll_speed - 1); self.redraw_scr()
+            elif ch == ord('c'): self.fg = (self.fg + 1) % 8; self.update_colors(); self.redraw_scr()
+            elif ch == ord('b'): self.bg = (self.bg + 1) % 8; self.update_colors(); self.redraw_scr()
+            elif ch == ord('v'): self.head_color = (self.head_color + 1) % 8; self.update_colors(); self.redraw_scr()
+            elif ch == ord('B'): self.show_border = (self.show_border + 1) % 3; self.prepare_lines(); self.redraw_scr()
             elif ch == ord('e'): self.flip_mode = (self.flip_mode + 1) % 5
-            elif ch == ord('='): self.width = min(c-10, self.width+4); self.prepare_lines()
-            elif ch == ord('-'): self.width = max(20, self.width-4); self.prepare_lines()
+            elif ch == ord('='): self.width = min(c-10, self.width+4); self.prepare_lines(); self.redraw_scr()
+            elif ch == ord('-'): self.width = max(20, self.width-4); self.prepare_lines(); self.redraw_scr()
 
-            # --- Смена языка (K) ---
             elif ch == ord('K'):
                 idx = self.available_langs.index(self.lang_code)
                 self.lang_code = self.available_langs[(idx + 1) % len(self.available_langs)]
                 self.load_lang(self.lang_code)
                 self.prepare_lines()
-
-                # ИСПРАВЛЕНИЕ: Стираем 5 символов в самом углу перед отрисовкой
                 r, c = self.screen.getmaxyx()
                 try:
-                    # Затираем место, где написано 'En' или 'Ru'
                     self.screen.addstr(r - 1, c - 6, "     ", curses.color_pair(5))
-                    self.screen.refresh() # Принудительно выводим "пустоту"
+                    self.screen.refresh()
                 except: pass
-
                 self.redraw_scr()
-            
-            # И не забудь добавить остановку голоса при выходе 'q'
-            if ch in [ord('q'), 1081]:
-                self.toggle_tts(stop=True) # Затыкаем голос при выходе
 
-            # --- Скрыть/показать бар (H) ---
             elif ch == ord('H'):
                 self.show_status = not self.show_status
                 self.prepare_lines()
                 self.screen.erase()
                 self.redraw_scr()
 
-            # --- Переход на процент (p) ---
-            elif ch == ord('P'):
-                self.jump_to_pct()
+            elif ch == ord('P'): self.jump_to_pct()
 
-            # Сброс поиска при любом другом действии
             if ch != -1 and ch not in [ord('n'), ord('N'), ord('/'), ord('f')]:
-                # Если поиск активен и нажата 'q', мы просто гасим поиск, 
-                # но не выходим из программы сразу
                 if self.search_query and ch == ord('q'):
                     self.search_query = ""
-                    continue # Пропускаем стандартную обработку 'q' (выход)
+                    continue
                 self.search_query = ""
 
     def do_search(self):
@@ -617,59 +700,63 @@ class MainWindow:
         self.screen.clrtoeol()
         self.screen.addstr(r - 1, 0, (prompt + " " * (c - len(prompt) - 1))[:c-1])
         
-        curses.echo(); curses.curs_set(1)
+        curses.echo()
+        curses.curs_set(1)
         try:
             raw = self.screen.getstr(r - 1, len(prompt))
             res = raw.decode('utf-8', errors='replace').strip()
             if res: 
                 self.search_query = res
+                self._search_re = re.compile(re.escape(res), re.IGNORECASE)
                 self.find_next()
+            else:
+                self.search_query = ""
+                self._search_re = None
         except: pass
-        curses.noecho(); curses.curs_set(0); self.screen.nodelay(True)
+            
+        curses.noecho()
+        curses.curs_set(0)
+        self.screen.nodelay(True)
 
     def find_prev(self):
         if not self.search_query: return
         for i in range(self.par_index - 1, -1, -1):
-            if self.search_query.lower() in self.lines[i][1].lower():
+            text = self.lines[i][1] if isinstance(self.lines[i], tuple) else str(self.lines[i])
+            if self.search_query.lower() in text.lower():
                 self.par_index = i; return
 
     def jump_to_pct(self):
         self.screen.nodelay(False)
         r, c = self.screen.getmaxyx()
         prompt = self.tr('ui_jump_to')
-        
         self.screen.attron(curses.color_pair(5))
         self.screen.move(r - 1, 0)
         self.screen.clrtoeol()
         self.screen.addstr(r - 1, 0, (prompt + " " * (c - len(prompt) - 1))[:c-1])
-        
         curses.echo()
         try:
             raw = self.screen.getstr(r - 1, len(prompt))
             val = int(raw.decode('utf-8'))
             if 0 <= val <= 100:
-                # Пересчитываем индекс строки исходя из процента
                 self.par_index = int((len(self.lines) - 1) * (val / 100.0))
         except: pass
-        
-        curses.noecho()
-        self.screen.nodelay(True)
-        self.redraw_scr()
+        curses.noecho(); self.screen.nodelay(True)
 
     def open_footnote(self):
         r, c = self.screen.getmaxyx()
-        d_h = r - (3 if self.show_border == 2 else (2 if self.show_border == 1 else 1))
+        f_off = 1 if self.show_status else 0
+        d_h = r - self.border_padding - f_off
         visible_notes = []
         for i in range(d_h):
             idx = self.par_index + i
             if idx < len(self.lines):
-                line_text = self.lines[idx][1]
+                line_data = self.lines[idx]
+                line_text = line_data[1] if isinstance(line_data, tuple) else str(line_data)
                 m = re.findall(r'\[(.*?)\]', line_text)
                 for note_id in m:
                     if (note_id in self.notes or any(note_id in k for k in self.notes)) and note_id not in visible_notes:
                         visible_notes.append(note_id)
         if not visible_notes: return
-        
         if not hasattr(self, 'last_note_idx'): self.last_note_idx = -1
         self.last_note_idx = (self.last_note_idx + 1) % len(visible_notes)
         self.show_note(visible_notes[self.last_note_idx])
@@ -682,75 +769,56 @@ class MainWindow:
                 if digits and "".join(filter(str.isdigit, k)) == digits:
                     note_text = v; break
         if not note_text: return
-
         r, c = self.screen.getmaxyx()
         max_w = min(c - 6, 70)
         wrapped = textwrap.wrap(note_text, width=max_w - 4)
         h = min(r - 4, len(wrapped) + 2)
         y, x = (r - h) // 2, (c - max_w) // 2
-        
         try:
             nw = curses.newwin(h, max_w, y, x)
             nw.bkgd(" ", curses.color_pair(1)); nw.box()
             nw.addstr(0, 2, f" {self.tr('ui_note_title')} ", curses.A_BOLD)
             for i, line in enumerate(wrapped[:h-2]):
-                nw.addstr(i + 1, 2, line)
+                nw.addstr(i + 1, 2, line[:max_w-4])
             nw.refresh(); nw.getch()
         except: pass
         self.redraw_scr()
 
 def main():
     import sys, curses, os, json, argparse
-
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('-h', '--help', action='store_true')
     parser.add_argument('-v', '--version', action='store_true')
     parser.add_argument('filename', nargs='?')
     args = parser.parse_args()
-
     config_dir = os.path.expanduser("~/.config/fb2less")
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.7")
+        print("fb2less version 0.9.8")
         return
-
     if args.help:
-        print("Usage: fb2less [FILE]")
-        print("\nControls:")
-        print("  h            - Help screen")
-        print("  o            - Settings menu")
-        print("  L            - Library")
-        print("  Z            - Scan directory")
-        print("  q            - Exit")
+        print("Usage: fb2less [FILE]\n\nControls:\n  h            - Help screen\n  o            - Settings menu\n  L            - Library\n  Z            - Scan directory\n  q            - Exit")
         return
 
     filename = args.filename
-    
-    # Авто-поиск последней книги, если аргумент не передан
     if not filename and os.path.exists(history_path):
         try:
             with open(history_path, "r", encoding='utf-8') as f:
                 data = json.load(f)
-                # Фильтруем только книги и берем путь самой свежей
                 books = {k: v for k, v in data.items() if isinstance(v, dict) and v.get('time')}
                 if books:
-                    # Находим ключ (путь) книги с максимальным временем
                     filename = max(books.items(), key=lambda x: x[1]['time'])[0]
-        except Exception:
-            pass
+        except: pass
 
     if filename:
         full_path = os.path.abspath(os.path.expanduser(filename))
         if not os.path.exists(full_path):
             print(f"Error: File not found - {full_path}")
             return
-        
-        # Запускаем MainWindow (он находится в этом же файле, импорт не нужен)
         curses.wrapper(lambda stdscr: MainWindow(stdscr, full_path))
     else:
-        print("Usage: fb2less [FILE]")
-        print("Hint: Open the library (L) or scan a folder (Z) to add books.")
+        print("Usage: fb2less [FILE]\nHint: Open the library (L) or scan a folder (Z) to add books.")
 
 if __name__ == "__main__":
     main()
