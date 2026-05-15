@@ -358,6 +358,25 @@ class MainWindow:
                                 word = m.group(0)  # ИСПРАВЛЕНО: Сохраняет оригинальный регистр букв книги
                                 self.screen.addstr(y_pos, margin + start_x, word, curses.color_pair(2) | curses.A_REVERSE)
                 except: pass
+
+        # =========================================================================
+        # НАДПИСЬ НА РАМКЕ (Вставляем в самый конец, чтобы текст книги её не затирал)
+        # =========================================================================
+        if self.show_border > 0:
+            try:
+                self.screen.attron(curses.color_pair(1))
+                r_x = c - 1 if self.show_border == 1 else x_r
+                l_x = 0 if self.show_border == 1 else x_l
+                
+                ver_str = " fb2less v0.9.9 "  # Пробелы по краям врезаются в рамку
+                ver_x = r_x - len(ver_str) - 2  # 2 символа отступа от правого края
+                
+                if ver_x > l_x + 2:
+                    # Печатаем строго на 0-й строке (верхняя линия рамки)
+                    self.screen.addstr(0, ver_x, ver_str, curses.color_pair(1) | curses.A_BOLD)
+                self.screen.attroff(curses.color_pair(1))
+            except: pass
+        # ===============================================================
         
         # 7. Рисуем статус-бар (если включен)
         self.draw_status(r, c)
@@ -401,7 +420,7 @@ class MainWindow:
             if c > len(mid) + len(right) + 20:
                 self.screen.addstr(r - 1, (c - len(mid)) // 2, mid)
             if c > len(right) + 5:
-                self.screen.addstr(r - 1, c - len(right) - 1, right)
+                self.screen.addstr(r - 1, c - len(right), right)
             self.screen.attroff(curses.color_pair(5))
         except: pass
         self.screen.refresh()
@@ -795,7 +814,7 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.8")
+        print("fb2less version 0.9.9")
         return
     if args.help:
         print("Usage: fb2less [FILE]\n\nControls:\n  h            - Help screen\n  o            - Settings menu\n  L            - Library\n  Z            - Scan directory\n  q            - Exit")
