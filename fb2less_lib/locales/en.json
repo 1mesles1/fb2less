@@ -40,6 +40,7 @@
         " -, =               - Text width",
         " c / b              - TEXT / BACKGROUND color",
         " v                  - HEADERS color",
+        " F                  - Toggle app version on border",
         " B                  - Border style",
         " H                  - Toggle Status Bar",
         " e                  - Flip mode",

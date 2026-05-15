@@ -203,7 +203,7 @@ def show_settings(app):
         app.current_voice = conf.get('current_voice', 'rhvoice')
 
     cur = 0
-    # Увеличиваем высоту окна до 14, так как пунктов стало больше
+    # Увеличиваем высоту окна до 13, один для ввода пути, вроде, так красивее.
     w_win, h_win = min(c - 4, 60), 13
     y, x = (r - h_win) // 2, (c - w_win) // 2
     
@@ -220,7 +220,7 @@ def show_settings(app):
             
             st_val = app.tr('ui_on') if app.show_status else app.tr('ui_off')
             
-            # Динамически формируем пункты меню
+            # Динамически формируем пункты меню, да об этом тоже пожалел
             menu_items = [
                 f"{app.tr('ui_language')}: {app.lang_code.upper()}",
                 f"{app.tr('set_status')}: {st_val}",
@@ -334,7 +334,7 @@ def show_settings(app):
                             app.tts_lang = chosen_lang
                             if app.voice_active: app.toggle_tts(stop=True);
 
-                elif cur == 8: # Сохранить (Бывший 9)
+                elif cur == 8: # Сохранить
                     app.scan_path = scan_path
                     conf['current_engine'] = app.current_engine
                     conf['current_voice'] = app.current_voice
@@ -343,7 +343,7 @@ def show_settings(app):
                     app.save_history()
                     curses.flushinp(); break
                 
-                elif cur == 9: # Назад (Бывший 10)
+                elif cur == 9: # Назад (Бывший 10), уже не раз пожалел, что сделал списком
                     curses.flushinp(); break                
 
                 sw.touchwin()
@@ -514,7 +514,7 @@ def show_library(app):
             start_x = max(2, (w_win - len(display_text)) // 2)
             lw.addstr(h_win - 4, start_x, display_text, attr)
 
-            # ЛИНИЯ-РАЗДЕЛИТЕЛЬ МЕЖДУ ПОИСКОМ И ПУТЕМ
+            # ЛИНИЯ-РАЗДЕЛИТЕЛЬ МЕЖДУ ПОИСКОМ И ПУТЕМ. Красиво, но было муторно.
             lw.hline(h_win - 3, 1, curses.ACS_HLINE, w_win - 2)
             
             # Очистка и отрисовка строки пути

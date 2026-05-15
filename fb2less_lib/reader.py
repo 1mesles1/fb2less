@@ -9,7 +9,6 @@ from . import dialogs
 class MainWindow:
     def __init__(self, stdscr, filename):
         self.screen = stdscr
-        # Используем новый класс для работы с данными
         self.storage = Storage(filename)
         self.filename = self.storage.filename
         self.voice_active = False
@@ -29,6 +28,7 @@ class MainWindow:
         self.flip_mode = conf.get("flip", 0)
         self.lang_code = conf.get("lang", "en")
         self.show_status = conf.get("status", 1)
+        self.show_version = conf.get("show_version", 1)
         self.scan_path = conf.get("scan_path", os.getcwd())
         self.tts_proc = None
         
@@ -112,7 +112,6 @@ class MainWindow:
             "voice_speed": getattr(self, 'voice_speed', 100),
             "tts_lang": getattr(self, 'tts_lang', 'ru'),
             "scan_path": getattr(self, 'scan_path', os.getcwd()),
-            # ДОБАВЛЯЕМ ПАРАМЕТРЫ ОЗВУЧКИ ДЛЯ ПЕРЕЗАПИСИ НА ДИСК:
             "current_engine": getattr(self, 'current_engine', 'spd-say'),
             "current_voice": getattr(self, 'current_voice', 'rhvoice')
         }
@@ -252,7 +251,7 @@ class MainWindow:
         step = max(1, width // 20)
 
         # ФАЗА 1: Уход (для режимов 1, 3, 4 медленно, для 2 - мгновенно)
-        if self.flip_mode in [1, 3, 4]:  # ИСПРАВЛЕНО: Восстановлен список режимов
+        if self.flip_mode in [1, 3, 4]: 
             rng = range(x_r-1, x_l-step, -step) if direction > 0 else range(x_l, x_r+step, step)
             for x in rng:
                 for cx in range(x, x+step if direction > 0 else x-step, 1 if direction > 0 else -1):
@@ -266,7 +265,7 @@ class MainWindow:
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
         # ФАЗА 2: Появление
-        if self.flip_mode in [2, 3, 4]:  # ИСПРАВЛЕНО: Восстановлен список режимов
+        if self.flip_mode in [2, 3, 4]: 
             for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
                 self.redraw_scr()
                 cov_rng = range(x_l, x) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
@@ -355,20 +354,17 @@ class MainWindow:
                         if self._search_re:
                             for m in self._search_re.finditer(text[:w_curr]):
                                 start_x = m.start()
-                                word = m.group(0)  # ИСПРАВЛЕНО: Сохраняет оригинальный регистр букв книги
+                                word = m.group(0) 
                                 self.screen.addstr(y_pos, margin + start_x, word, curses.color_pair(2) | curses.A_REVERSE)
                 except: pass
 
-        # =========================================================================
-        # НАДПИСЬ НА РАМКЕ (Вставляем в самый конец, чтобы текст книги её не затирал)
-        # =========================================================================
-        if self.show_border > 0:
+        if self.show_border > 0 and bool(getattr(self, 'show_version', True)):
             try:
                 self.screen.attron(curses.color_pair(1))
                 r_x = c - 1 if self.show_border == 1 else x_r
                 l_x = 0 if self.show_border == 1 else x_l
                 
-                ver_str = " fb2less v0.9.9 "  # Пробелы по краям врезаются в рамку
+                ver_str = " fb2less v1.0.0 "  # Пробелы по краям врезаются в рамку
                 ver_x = r_x - len(ver_str) - 2  # 2 символа отступа от правого края
                 
                 if ver_x > l_x + 2:
@@ -376,7 +372,6 @@ class MainWindow:
                     self.screen.addstr(0, ver_x, ver_str, curses.color_pair(1) | curses.A_BOLD)
                 self.screen.attroff(curses.color_pair(1))
             except: pass
-        # ===============================================================
         
         # 7. Рисуем статус-бар (если включен)
         self.draw_status(r, c)
@@ -461,7 +456,7 @@ class MainWindow:
                         voice_id = parts[4] if '/' in parts[4] else parts[3]
                         voices.append((voice_id, f"espeak: {voice_id} ({lang})", lang))
             except: pass
-            if not voices: voices.append(('ru', 'Espeak Ru (По умолчанию)', 'ru'))
+            if not voices: voices.append(('ru', 'Espeak Ru (По умолчанию)', 'ru'))#Чтобы брал из бара, пока не убираю
             
         return voices
 
@@ -541,7 +536,7 @@ class MainWindow:
         last_size = None
 
         while True:
-            # УБРАНО: Никаких блокирующих очередей tts_queue от ИИ!
+            # УБРАНО: Никаких блокирующих очередей tts_queue от ИИ - с его кодом не работает и он не знает почему!
             
             r, c = self.screen.getmaxyx()
             size = (r, c)
@@ -560,6 +555,32 @@ class MainWindow:
             if ch == -1: 
                 time.sleep(0.01)
                 continue
+
+            elif ch in [ord('X'), 1063]:
+                import random
+
+                for _ in range(30):
+                    r, c = self.screen.getmaxyx()
+
+                    matrix_chars = "".join(random.choice("01$#@%&§?*+=[]{}") for _ in range(c - 1))
+                    
+                    self.screen.attron(curses.color_pair(5))
+                    self.screen.move(r - 1, 0)
+                    self.screen.clrtoeol()
+                    # Выводим цифровой шум
+                    self.screen.addstr(r - 1, 0, matrix_chars[:c-1])
+                    
+                    msg = " Follow the white rabbit... "
+                    if c > len(msg) + 4:
+                        self.screen.addstr(r - 1, (c - len(msg)) // 2, msg, curses.color_pair(5) | curses.A_BOLD)
+                        
+                    self.screen.attroff(curses.color_pair(5))
+                    self.screen.refresh()
+                    time.sleep(0.05) # Скорость бегущих символов
+                
+                self.redraw_scr()
+                continue
+
 
             # 1. СИСТЕМНЫЕ
             if ch in [ord('q'), 1081]:
@@ -696,6 +717,15 @@ class MainWindow:
                 except: pass
                 self.redraw_scr()
 
+            # ПЕРЕКЛЮЧАТЕЛЬ НА ВЕРХНЮЮ РАМКУ ПО КЛАВИШЕ F:
+            elif ch in [ord('F'), 1040]: # Заглавная F или заглавная А
+                # Считываем текущее состояние (если флага нет в памяти — берем True)
+                current_state = bool(getattr(self, 'show_version', True))
+                # Переключаем и ПРИНУДИТЕЛЬНО прописываем в объект MainWindow новое значение
+                setattr(self, 'show_version', not current_state)
+                self.save_history()
+                self.redraw_scr()
+
             elif ch == ord('H'):
                 self.show_status = not self.show_status
                 self.prepare_lines()
@@ -808,16 +838,30 @@ def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('-h', '--help', action='store_true')
     parser.add_argument('-v', '--version', action='store_true')
+    parser.add_argument('--credits', action='store_true')
     parser.add_argument('filename', nargs='?')
     args = parser.parse_args()
+    
     config_dir = os.path.expanduser("~/.config/fb2less")
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 0.9.9")
+        print("fb2less version 1.0.0")
         return
+
+    if args.credits:
+        print("┌──────────────────────────────────────────────────────────┐")
+        print("│                      fb2less v1.0.0                      │")
+        print("├──────────────────────────────────────────────────────────┤")
+        print("│  Разработчик:  measles                                   │")
+        print("│                                                          │")
+        print("│  Особая благодарность за подсказки с кодом, выравнивание │")
+        print("│  рамок и победу над сносками - Gemini (Google AI)        │")
+        print("└──────────────────────────────────────────────────────────┘")
+        return
+
     if args.help:
-        print("Usage: fb2less [FILE]\n\nControls:\n  h            - Help screen\n  o            - Settings menu\n  L            - Library\n  Z            - Scan directory\n  q            - Exit")
+        print("Usage: fb2less [FILE]\n\nControls:\n  h            - Help screen\n  o            - Settings menu\n  L            - Library\n  Z            - Scan directory\n  q            - Exit\n")
         return
 
     filename = args.filename
