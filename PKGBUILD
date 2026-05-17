@@ -1,7 +1,7 @@
 # Maintainer: 1mesles1 <https://github.com/1mesles1>
 
 pkgname=fb2less
-pkgver=1.0.1
+pkgver=1.0.2
 pkgrel=1
 pkgdesc="Advanced console reader (FB2, EPUB, TXT) with multi-language support and TTS"
 arch=('any')
