@@ -250,49 +250,62 @@ class MainWindow:
         width = x_r - x_l
         step = max(1, width // 20)
 
-        # ФАЗА 1: Уход (ОПТИМИЗИРОВАНО: Защита от мерцания через doupdate)
+        # ФАЗА 1: Уход старой страницы (В виртуальный буфер, без мерцания)
         if self.flip_mode in [1, 3, 4]: 
             rng = range(x_r-1, x_l-step, -step) if direction > 0 else range(x_l, x_r+step, step)
             for x in rng:
                 for cx in range(x, x+step if direction > 0 else x-step, 1 if direction > 0 else -1):
                     if x_l <= cx < x_r: 
                         self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
-                # Виртуальное обновление кадра ухода в памяти
                 self.screen.noutrefresh()
                 curses.doupdate()
                 time.sleep(0.01)
         elif self.flip_mode == 2:
             for x in range(x_l, x_r): 
                 self.screen.vline(y_t, x, ord(' ')|curses.color_pair(3), y_b-y_t)
-            # Мгновенный виртуальный уход страницы
             self.screen.noutrefresh()
             curses.doupdate()
 
-        # Меняем страницу в памяти
+        # Переключаем индекс страницы в памяти
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
-        # ФАЗА 2: Появление (ОПТИМИЗИРОВАНО: Полный рендеринг через doupdate)
+        # ФАЗА 2: Появление новой страницы
         if self.flip_mode in [2, 3, 4]: 
-            self._animating_now = True
-            
-            for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
-                # Отрисовываем новую страницу в скрытый Си-буфер
+            try:
+                # Создаем временное виртуальное окно размером во весь экран
+                v_win = curses.newwin(r, c, 0, 0)
+                
+                # Подменяем окно приложения на виртуальное, чтобы redraw_scr нарисовал всё туда
+                orig_screen = self.screen
+                self.screen = v_win
                 self.redraw_scr()
+                self.screen = orig_screen
                 
-                # Поверх накладываем уменьшающуюся шторку в буфере памяти
-                cov_rng = range(x_l, x) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
-                for cx in cov_rng: 
-                    self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                # Цикл анимации: шторка открывает готовую страницу из ОЗУ
+                for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
+                    
+                    # ТВОЯ РОДНАЯ СКОРОСТЬ: Мгновенно копируем страницу на реальный экран
+                    v_win.overwrite(self.screen)
+                    
+                    # Накладываем поверх шторку черноты на нераскрытую часть
+                    cov_rng = range(x_l, x) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
+                    for cx in cov_rng: 
+                        self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                    
+                    # ЖЕСТКАЯ СИНХРОНИЗАЦИЯ ДЛЯ TERMUX:
+                    # noutrefresh гарантирует, что кадр уйдет на отрисовку ТОЛЬКО тогда,
+                    # когда и overwrite, и все линии vline уже полностью нарисованы.
+                    self.screen.noutrefresh()
+                    curses.doupdate() # Атомарный вывод совмещенного кадра
+                    
+                    time.sleep(0.01 if self.flip_mode != 2 else 0.02)
                 
-                # Атомарный вывод на экран только изменившихся пикселей
-                self.screen.noutrefresh()
-                curses.doupdate()
-                time.sleep(0.01 if self.flip_mode != 2 else 0.02)
+                # Удаляем виртуальное окно из памяти
+                del v_win
+            except:
+                pass
                 
-            if hasattr(self, '_animating_now'): 
-                del self._animating_now
-            
-            # Окончательный чистый рендер без шторок
+            # Окончательный чистый рендер страницы
             self.redraw_scr()
         else: 
             self.redraw_scr()
@@ -389,7 +402,7 @@ class MainWindow:
                 r_x = c - 1 if self.show_border == 1 else x_r
                 l_x = 0 if self.show_border == 1 else x_l
                 
-                ver_str = " fb2less v1.0.5 "
+                ver_str = " fb2less v1.0.6 "
                 ver_x = r_x - len(ver_str) - 2  
                 
                 if ver_x > l_x + 2:
@@ -899,12 +912,12 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 1.0.4")
+        print("fb2less version 1.0.6")
         return
 
     if args.credits:
         print("┌──────────────────────────────────────────────────────────┐")
-        print("│                      fb2less v1.0.5                      │")
+        print("│                      fb2less v1.0.6                      │")
         print("├──────────────────────────────────────────────────────────┤")
         print("│  Разработчик:  measles                                   │")
         print("│                                                          │")
