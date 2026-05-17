@@ -364,12 +364,17 @@ class MainWindow:
                 r_x = c - 1 if self.show_border == 1 else x_r
                 l_x = 0 if self.show_border == 1 else x_l
                 
-                # ИСПРАВЛЕНО: Меняем жестко зашитую строку на v1.0.1
-                ver_str = " fb2less v1.0.2 "  
+                ver_str = " fb2less v1.0.3 "  
                 ver_x = r_x - len(ver_str) - 2  
                 
                 if ver_x > l_x + 2:
-                    self.screen.addstr(0, ver_x, ver_str, curses.color_pair(1) | curses.A_BOLD)
+                    # ИСПРАВЛЕНО: Вернули проверку флага show_version
+                    if bool(getattr(self, 'show_version', True)):
+                        self.screen.addstr(0, ver_x, ver_str, curses.color_pair(1) | curses.A_BOLD)
+                    else:
+                        # Если флаг выключен — принудительно затираем текст сплошной линией рамки
+                        self.screen.hline(0, ver_x, curses.ACS_HLINE, len(ver_str))
+                        
                 self.screen.attroff(curses.color_pair(1))
             except: pass
         
@@ -740,13 +745,14 @@ class MainWindow:
                 self.redraw_scr()
 
             # ПЕРЕКЛЮЧАТЕЛЬ НА ВЕРХНЮЮ РАМКУ ПО КЛАВИШЕ F:
-            elif ch in [ord('F'), 1040]: # Заглавная F или заглавная А
-                # Считываем текущее состояние (если флага нет в памяти — берем True)
-                current_state = bool(getattr(self, 'show_version', True))
-                # Переключаем и ПРИНУДИТЕЛЬНО прописываем в объект MainWindow новое значение
-                setattr(self, 'show_version', not current_state)
-                self.save_history()
+            elif ch == ord('F'):
+                current_state = getattr(self, 'show_version', True)
+                # Инвертируем состояние флага
+                self.show_version = not current_state
+                # Принудительно очищаем и перерисовываем экран
+                self.screen.erase()
                 self.redraw_scr()
+                continue
 
             elif ch == ord('H'):
                 self.show_status = not self.show_status
@@ -868,12 +874,12 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 1.0.2")
+        print("fb2less version 1.0.3")
         return
 
     if args.credits:
         print("┌──────────────────────────────────────────────────────────┐")
-        print("│                      fb2less v1.0.2                      │")
+        print("│                      fb2less v1.0.3                      │")
         print("├──────────────────────────────────────────────────────────┤")
         print("│  Разработчик:  measles                                   │")
         print("│                                                          │")
