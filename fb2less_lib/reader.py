@@ -690,16 +690,38 @@ class MainWindow:
                 elif self.par_index > 0:
                     self.animate_flip(-1)
 
-            # 6. ГОРЯЧИЕ КЛАВИШИ ВИДА
+            # 6. ГОРЯЧИЕ КЛАВИШИ ВИДА И АВТОСКРОЛЛА (Исправлен баг слияния цветов на черном фоне)
             elif ch == ord('a'): 
                 self.auto_scroll = not self.auto_scroll
                 self.last_auto_time = time.time()
                 self.redraw_scr()
             elif ch == ord('s') and self.auto_scroll: self.scroll_speed = min(10, self.scroll_speed + 1); self.redraw_scr()
             elif ch == ord('S') and self.auto_scroll: self.scroll_speed = max(1, self.scroll_speed - 1); self.redraw_scr()
-            elif ch == ord('c'): self.fg = (self.fg + 1) % 8; self.update_colors(); self.redraw_scr()
-            elif ch == ord('b'): self.bg = (self.bg + 1) % 8; self.update_colors(); self.redraw_scr()
-            elif ch == ord('v'): self.head_color = (self.head_color + 1) % 8; self.update_colors(); self.redraw_scr()
+            
+            elif ch == ord('c'): 
+                # Переключаем цвет текста, но если он совпал с фоном — шагаем дальше
+                self.fg = (self.fg + 1) % 8
+                if self.fg == self.bg: 
+                    self.fg = (self.fg + 1) % 8
+                self.update_colors()
+                self.redraw_scr()
+                
+            elif ch == ord('b'): 
+                # Переключаем фон, но следим, чтобы он не слился с текстом или заголовком
+                self.bg = (self.bg + 1) % 8
+                if self.bg == self.fg or self.bg == self.head_color:
+                    self.bg = (self.bg + 1) % 8
+                self.update_colors()
+                self.redraw_scr()
+                
+            elif ch == ord('v'): 
+                # Переключаем цвет заголовков, пропуская цвет фона
+                self.head_color = (self.head_color + 1) % 8
+                if self.head_color == self.bg:
+                    self.head_color = (self.head_color + 1) % 8
+                self.update_colors()
+                self.redraw_scr()
+                
             elif ch == ord('B'): self.show_border = (self.show_border + 1) % 3; self.prepare_lines(); self.redraw_scr()
             elif ch == ord('e'): self.flip_mode = (self.flip_mode + 1) % 5
             elif ch == ord('='): self.width = min(c-10, self.width+4); self.prepare_lines(); self.redraw_scr()
@@ -846,12 +868,12 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 1.0.0")
+        print("fb2less version 1.0.1")
         return
 
     if args.credits:
         print("┌──────────────────────────────────────────────────────────┐")
-        print("│                      fb2less v1.0.0                      │")
+        print("│                      fb2less v1.0.1                      │")
         print("├──────────────────────────────────────────────────────────┤")
         print("│  Разработчик:  measles                                   │")
         print("│                                                          │")
