@@ -364,7 +364,7 @@ class MainWindow:
                 r_x = c - 1 if self.show_border == 1 else x_r
                 l_x = 0 if self.show_border == 1 else x_l
                 
-                ver_str = " fb2less v1.0.0 "  # Пробелы по краям врезаются в рамку
+                ver_str = " fb2less v1.0.1 "  # Пробелы по краям врезаются в рамку
                 ver_x = r_x - len(ver_str) - 2  # 2 символа отступа от правого края
                 
                 if ver_x > l_x + 2:
