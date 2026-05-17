@@ -264,13 +264,24 @@ class MainWindow:
         # Меняем страницу
         self.par_index = max(0, min(len(self.lines)-1, self.par_index + (d_h if direction > 0 else -d_h)))
 
-        # ФАЗА 2: Появление
+        # ФАЗА 2: Появление с эффектом и БЕЗ МЕРЦАНИЯ
         if self.flip_mode in [2, 3, 4]: 
+            # Ставим флаг для метода redraw_scr, чтобы он временно не вызывал erase()
+            self._animating_now = True
+            
             for x in (range(x_r-1, x_l-step, -step) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x_l, x_r+step, step)):
+                # Отрисовываем текст поверх (без очистки экрана, что убирает мерцание!)
                 self.redraw_scr()
+                
+                # Рисуем шторку на остаток экрана
                 cov_rng = range(x_l, x) if (self.flip_mode in [2, 3] and direction > 0) or (self.flip_mode==4 and direction < 0) else range(x, x_r)
-                for cx in cov_rng: self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                for cx in cov_rng: 
+                    self.screen.vline(y_t, cx, ord(' ')|curses.color_pair(3), y_b-y_t)
+                
                 self.screen.refresh(); time.sleep(0.01 if self.flip_mode != 2 else 0.02)
+                
+            # Снимаем флаг анимации
+            if hasattr(self, '_animating_now'): del self._animating_now
         else: 
             self.redraw_scr()
 
@@ -364,7 +375,7 @@ class MainWindow:
                 r_x = c - 1 if self.show_border == 1 else x_r
                 l_x = 0 if self.show_border == 1 else x_l
                 
-                ver_str = " fb2less v1.0.3 "  
+                ver_str = " fb2less v1.0.4 "
                 ver_x = r_x - len(ver_str) - 2  
                 
                 if ver_x > l_x + 2:
@@ -874,12 +885,12 @@ def main():
     history_path = os.path.join(config_dir, "history.json")
 
     if args.version:
-        print("fb2less version 1.0.3")
+        print("fb2less version 1.0.4")
         return
 
     if args.credits:
         print("┌──────────────────────────────────────────────────────────┐")
-        print("│                      fb2less v1.0.3                      │")
+        print("│                      fb2less v1.0.4                      │")
         print("├──────────────────────────────────────────────────────────┤")
         print("│  Разработчик:  measles                                   │")
         print("│                                                          │")
